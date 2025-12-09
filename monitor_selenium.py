@@ -6,14 +6,37 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 from colorama import init, Fore, Style
+from fake_useragent import UserAgent
+import random
 
 init()
 
 URL = "https://www.firstcry.com/hotwheels/5/0/113?sort=popularity&q=ard-hotwheels&ref2=q_ard_hotwheels&asid=53241"
+
+# Add your proxies here in the format "ip:port" or "user:pass@ip:port"
+# Example: "142.93.12.3:8080"
+PROXIES = [] 
+
 seen_products = {}
 
 def setup_driver():
     chrome_options = Options()
+    
+    # 1. User-Agent Rotation
+    try:
+        ua = UserAgent()
+        user_agent = ua.random
+        chrome_options.add_argument(f'user-agent={user_agent}')
+        print(f"{Fore.MAGENTA}Using User-Agent: {user_agent[:50]}...{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.YELLOW}Could not set fake UA: {e}. Using default.{Style.RESET_ALL}")
+
+    # 2. Proxy Rotation
+    if PROXIES:
+        proxy = random.choice(PROXIES)
+        chrome_options.add_argument(f'--proxy-server={proxy}')
+        print(f"{Fore.MAGENTA}Using Proxy: {proxy}{Style.RESET_ALL}")
+
     chrome_options.add_argument("--headless") # Run in headless mode
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
@@ -34,13 +57,13 @@ def scroll_to_bottom(driver):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 
         # Wait to load page
-        time.sleep(2)
+        time.sleep(1)
 
         # Calculate new scroll height and compare with last scroll height
         new_height = driver.execute_script("return document.body.scrollHeight")
         if new_height == last_height:
             # Try one more small scroll or wait a bit longer to be sure
-            time.sleep(2)
+            time.sleep(1.5)
             new_height = driver.execute_script("return document.body.scrollHeight")
             if new_height == last_height:
                 break

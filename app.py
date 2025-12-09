@@ -24,6 +24,7 @@ def scraper_loop():
     try:
         while True:
             is_scraping = True
+            start_time = time.time()
             print(f"Scraping... {datetime.datetime.now().strftime('%H:%M:%S')}")
             
             try:
@@ -97,7 +98,18 @@ def scraper_loop():
                 print(f"Error in scraper loop: {e}")
             
             is_scraping = False
-            time.sleep(10)
+            
+            # Calculate time taken
+            end_time = time.time()
+            duration = end_time - start_time
+            print(f"Scrape finished in {duration:.1f} seconds.")
+            
+            # Target interval: 10 seconds
+            # Sleep = Target - Duration
+            # But sleep at least 1 second to be safe
+            sleep_time = max(1.0, 10.0 - duration)
+            print(f"Sleeping for {sleep_time:.1f} seconds (Target interval: 10s)...")
+            time.sleep(sleep_time)
             
     except Exception as e:
         print(f"Fatal scraper error: {e}")
