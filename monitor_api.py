@@ -28,7 +28,9 @@ API_URL = (
 )
 IMAGE_BASE_URL = "https://cdn.fcglcdn.com/brainbees/images/products/219x265/"
 PAGE_SIZE = 20
-PRODUCT_DETAIL_JSON_PATTERN = re.compile(r"(?:^|[;,])\s*ProductDetailJSON\s*=")
+CURRENT_PRODUCT_DETAIL_JSON_PATTERN = re.compile(
+    r"(?:^|[;,]|\bvar\s+)\s*CurrentProductDetailJSON\s*="
+)
 
 
 class ApiScrapeError(RuntimeError):
@@ -66,6 +68,7 @@ DETAIL_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_DETAIL_TIMEOUT", 10)
 POLL_INTERVAL_SECONDS = _env_float("FIRSTCRY_API_POLL_INTERVAL", 60)
 MAX_PAGES = _env_int("FIRSTCRY_API_MAX_PAGES", 30)
 DETAIL_WORKERS = _env_int("FIRSTCRY_API_DETAIL_WORKERS", 8)
+MIN_API_PARSE_RATIO = _env_float("FIRSTCRY_API_MIN_PARSE_RATIO", 0.95)
 MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
 VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
     "0",
@@ -221,20 +224,33 @@ def parse_api_product(raw_product):
     }
 
 
-def parse_detail_stock_count(html):
-    match = PRODUCT_DETAIL_JSON_PATTERN.search(html)
+def _parse_json_assignment(html, pattern, missing_message):
+    match = pattern.search(html)
     if not match:
-        raise ApiScrapeError("FirstCry product detail page is missing ProductDetailJSON")
+        raise ApiScrapeError(missing_message)
 
     json_start = html.find("{", match.end())
     if json_start < 0:
         raise ApiScrapeError("FirstCry product detail page is missing JSON data")
 
     try:
-        payload = json.loads(_extract_balanced_json(html, json_start))
-        return max(0, _parse_int(payload["PInfo"]["CurSt"]))
+        return json.loads(_extract_balanced_json(html, json_start))
+    except json.JSONDecodeError as exc:
+        raise ApiScrapeError("FirstCry product detail page has invalid JSON data") from exc
+
+
+def parse_detail_stock_count(html, product_id):
+    product_details = _parse_json_assignment(
+        html,
+        CURRENT_PRODUCT_DETAIL_JSON_PATTERN,
+        "FirstCry product detail page is missing CurrentProductDetailJSON",
+    )
+
+    try:
+        stock_count = product_details[str(product_id)]["CS"]
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ApiScrapeError("FirstCry product detail page has unexpected stock data") from exc
+    return max(0, _parse_int(stock_count))
 
 
 def fetch_detail_stock_count(product, opener=urlopen):
@@ -250,7 +266,7 @@ def fetch_detail_stock_count(product, opener=urlopen):
     try:
         with opener(request, timeout=DETAIL_TIMEOUT_SECONDS) as response:
             html = response.read().decode("utf-8", errors="replace")
-            return parse_detail_stock_count(html)
+            return parse_detail_stock_count(html, product["id"])
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(f"FirstCry product detail request failed: {exc}") from exc
 
@@ -293,7 +309,7 @@ def verify_in_stock_products(products, detail_fetcher=fetch_detail_stock_count):
                 "detail_stock_count": detail_stock_count,
                 "stock_count": detail_stock_count,
                 "in_stock": detail_stock_count > 0,
-                "stock_signal": "detail_page_curst",
+                "stock_signal": "detail_page_current_product_cs",
             }
             if detail_stock_count <= 0:
                 LOGGER.info(
@@ -382,10 +398,23 @@ def fetch_api_products(
         if page["ttl_seconds"] >= 0:
             ttl_values.append(page["ttl_seconds"])
 
-    if len(raw_products) < expected_products:
+    if not raw_products:
+        raise ApiScrapeError("FirstCry listing API returned no products")
+
+    if (
+        len(raw_products) < expected_products
+        and len(raw_products) / expected_products < MIN_API_PARSE_RATIO
+    ):
         raise ApiScrapeError(
             "FirstCry listing API returned an incomplete snapshot: "
             f"found {len(raw_products)} of {expected_products} products"
+        )
+    if len(raw_products) < expected_products:
+        LOGGER.warning(
+            "FirstCry listing API returned a near-complete snapshot: "
+            "found %s of %s products",
+            len(raw_products),
+            expected_products,
         )
 
     products = {}
