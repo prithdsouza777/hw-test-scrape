@@ -9,6 +9,7 @@ from flask import Flask, jsonify, render_template
 from monitor_api import (
     MISSING_CONFIRMATION_SNAPSHOTS,
     POLL_INTERVAL_SECONDS,
+    add_cart_action_metadata,
     fetch_api_products,
 )
 from product_tracker import ProductTracker
@@ -26,6 +27,23 @@ last_error = None
 last_ttl_seconds = None
 catalog_count = 0
 is_scraping = False
+
+
+def _decorate_snapshot_products(snapshot):
+    snapshot = dict(snapshot)
+    snapshot["products"] = {
+        product_id: add_cart_action_metadata(product)
+        for product_id, product in snapshot.get("products", {}).items()
+    }
+    snapshot["pending_products"] = {
+        product_id: add_cart_action_metadata(product)
+        for product_id, product in snapshot.get("pending_products", {}).items()
+    }
+    snapshot["monitored_products"] = [
+        add_cart_action_metadata(product)
+        for product in snapshot.get("monitored_products", [])
+    ]
+    return snapshot
 
 
 def scraper_loop():
@@ -83,7 +101,7 @@ def index():
 @app.route("/api/data")
 def get_data():
     with state_lock:
-        snapshot = tracker.snapshot()
+        snapshot = _decorate_snapshot_products(tracker.snapshot())
         snapshot.update(
             {
                 "source": "firstcry_listing_api",

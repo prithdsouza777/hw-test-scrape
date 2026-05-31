@@ -35,6 +35,8 @@ CART_PRODUCT_COUNT_URL = (
     "https://csc.fcappservices.in/ShoppingCart/ShoppingCart.svc/json/"
     "GetCartProductCount"
 )
+FIRSTCRY_CART_URL = "https://www.firstcry.com/cart"
+FIRSTCRY_CART_COOKIE_NAME = "_$FC$_cookies_for_cart_v2_"
 IMAGE_BASE_URL = "https://cdn.fcglcdn.com/brainbees/images/products/219x265/"
 PAGE_SIZE = 20
 CURRENT_PRODUCT_DETAIL_JSON_PATTERN = re.compile(
@@ -235,6 +237,18 @@ def _build_image_url(images):
         return ""
     image_name = re.sub(r"\.[^.]+$", ".webp", first_image)
     return IMAGE_BASE_URL + image_name
+
+
+def build_cart_cookie_value(product_id, quantity=1):
+    return f"NO^{product_id}^{quantity}^0"
+
+
+def add_cart_action_metadata(product):
+    product = dict(product)
+    product["cart_cookie_name"] = FIRSTCRY_CART_COOKIE_NAME
+    product["cart_cookie"] = build_cart_cookie_value(product["id"])
+    product["cart_url"] = FIRSTCRY_CART_URL
+    return product
 
 
 def _extract_product_ids(value):
@@ -580,7 +594,7 @@ def parse_cart_product_count(raw_response):
 
 def fetch_cart_product_count(product, opener=urlopen):
     payload = json.dumps(
-        {"ProCookie": f"NO^{product['id']}^1^0"},
+        {"ProCookie": build_cart_cookie_value(product["id"])},
         separators=(",", ":"),
     ).encode("utf-8")
     request = Request(
@@ -1027,6 +1041,11 @@ def fetch_api_products(
 
     if page_fetcher is fetch_api_page:
         save_known_products(products)
+
+    products = {
+        product_id: add_cart_action_metadata(product)
+        for product_id, product in products.items()
+    }
 
     elapsed_seconds = time.monotonic() - started_at
     result = ApiFetchResult(
