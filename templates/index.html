@@ -162,11 +162,6 @@
             opacity: 0.9;
         }
 
-        .product-link:disabled {
-            cursor: wait;
-            opacity: 0.65;
-        }
-
         .product-link.add-to-cart {
             background: #03dac6;
         }
@@ -181,17 +176,6 @@
             color: #03dac6;
             font-size: 0.78em;
             margin-bottom: 10px;
-        }
-
-        .action-status {
-            display: none;
-            padding: 10px 12px;
-            margin-bottom: 20px;
-            background: #1e2f2d;
-            border: 1px solid #03dac6;
-            border-radius: 8px;
-            color: #b2fff7;
-            font-size: 0.9em;
         }
 
         @keyframes slideIn {
@@ -359,8 +343,6 @@
         </div>
 
         <div class="error-banner" id="scrape-error"></div>
-        <div class="action-status" id="action-status"></div>
-
         <div class="monitor-section" id="monitor-section" style="display: none;">
             <div class="monitor-header">
                 <div class="monitor-title">Live Buyable Products (Cart Accepted)</div>
@@ -478,47 +460,11 @@
             return createElement('div', 'cart-status', text);
         }
 
-        function showActionStatus(message, isError = false) {
-            const status = document.getElementById('action-status');
-            status.textContent = message;
-            status.style.display = 'block';
-            status.style.borderColor = isError ? '#cf6679' : '#03dac6';
-            status.style.background = isError ? '#351c23' : '#1e2f2d';
-            status.style.color = isError ? '#ffb4bf' : '#b2fff7';
-        }
-
-        function handleAddToCart(product, button) {
-            const originalText = button.textContent;
-            button.disabled = true;
-            button.textContent = 'ADDING...';
-            showActionStatus(`Opening a new Selenium FirstCry cart tab for ${product.name}...`);
-
-            fetch(`/api/add-to-cart/${encodeURIComponent(product.id)}`, { method: 'POST' })
-                .then(response => response.json().then(payload => ({ response, payload })))
-                .then(({ response, payload }) => {
-                    if (!response.ok || !payload.ok) {
-                        throw new Error(payload.error || `Add to cart failed with HTTP ${response.status}`);
-                    }
-                    showActionStatus(
-                        `Opened a new FirstCry cart tab with ${product.name}. Checkout there.`
-                    );
-                })
-                .catch(error => {
-                    showActionStatus(error.message, true);
-                    console.error('Add to cart failed:', error);
-                })
-                .finally(() => {
-                    button.disabled = false;
-                    button.textContent = originalText;
-                });
-        }
-
         function createAddToCartButton(product) {
-            const button = createElement('button', 'product-link add-to-cart', 'ADD TO CART');
-            button.type = 'button';
-            button.title = 'Cart API accepted this product. Opens a new Selenium FirstCry cart tab with it added.';
-            button.addEventListener('click', () => handleAddToCart(product, button));
-            return button;
+            const link = createProductLink(product, 'ADD TO CART');
+            link.className = 'product-link add-to-cart';
+            link.title = 'Cart API accepted this product. Opens the FirstCry product page in a new tab.';
+            return link;
         }
 
         function renderAlerts(alerts) {
