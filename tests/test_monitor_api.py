@@ -191,6 +191,42 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual(2, products["20"]["stock_count"])
         self.assertFalse(products["21"]["in_stock"])
 
+    def test_fetch_api_products_merges_multiple_listing_sorts(self):
+        calls = []
+
+        def page_fetcher(page_number, sort_expression=None):
+            calls.append((sort_expression, page_number))
+            if sort_expression == "popularity":
+                return make_page(
+                    [make_raw_product("1", stock="0")],
+                    expected_products=1,
+                    ttl_seconds=120,
+                )
+            return make_page(
+                [
+                    make_raw_product("1", stock="5"),
+                    make_raw_product("2", stock="3"),
+                ],
+                expected_products=2,
+                ttl_seconds=90,
+            )
+
+        products, result = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=None,
+            sort_expressions=("popularity", "newarrivals"),
+        )
+
+        self.assertEqual([("popularity", 1), ("newarrivals", 1)], calls)
+        self.assertEqual(3, result.raw_products)
+        self.assertEqual(2, result.unique_products)
+        self.assertEqual(2, result.expected_products)
+        self.assertEqual(90, result.ttl_seconds)
+        self.assertEqual(("popularity", "newarrivals"), result.sort_expressions)
+        self.assertEqual(5, products["1"]["stock_count"])
+        self.assertTrue(products["1"]["in_stock"])
+        self.assertEqual(3, products["2"]["stock_count"])
+
     def test_fetch_api_products_rejects_incomplete_snapshot(self):
         def page_fetcher(page_number):
             return make_page([make_raw_product("1")], expected_products=21)
