@@ -9,12 +9,12 @@ https://www.firstcry.com/svcs/SearchResult.svc/GetSearchResultProductsPaging
 ```
 
 The response exposes each product's `CrntStock` quantity. For products where
-the listing API claims stock is available, the monitor also fetches the
-product-detail page and confirms `CurrentProductDetailJSON[pid].CS` before
-checking FirstCry's cart product-count API with an isolated synthetic cart
-cookie. The cart check catches products that still look available on the page
-but are removed when added to cart. This check does not use or modify your
-browser cart.
+the listing API claims stock is available, the monitor also calls
+`CommonService.svc/getProduct/pid={pid}/uid=0` and confirms the matching
+`PColor[].CS` value before checking FirstCry's cart product-count API with an
+isolated synthetic cart cookie. The cart check catches products that still look
+available upstream but are removed when added to cart. This check does not use
+or modify your browser cart.
 
 The dashboard separates the signals:
 
