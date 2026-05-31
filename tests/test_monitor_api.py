@@ -76,6 +76,7 @@ class ApiProductParsingTests(unittest.TestCase):
         self.assertIn("hw_auto_add=1", link)
         self.assertIn("hw_checkout=1", link)
         self.assertIn("hw_pid=23074890", link)
+        self.assertIn("#hw_auto_add=1", link)
 
     def test_parse_api_product_uses_current_stock_quantity(self):
         product = parse_api_product(
