@@ -10,9 +10,9 @@ https://www.firstcry.com/svcs/SearchResult.svc/GetSearchResultProductsPaging
 
 The response exposes each product's `CrntStock` quantity. For products where
 the listing API claims stock is available, the monitor also fetches the
-product-detail page and confirms `ProductDetailJSON.PInfo.CurSt` before showing
-that product as in stock. This reduces the stale listing false positives that
-can happen while FirstCry is publishing a restock.
+product-detail page and confirms `CurrentProductDetailJSON[pid].CS` before
+showing that product as in stock. This reduces the stale listing false
+positives that can happen while FirstCry is publishing a restock.
 
 ## Run
 
@@ -43,6 +43,8 @@ Selenium monitor before replacing the current workflow.
   default `10`
 - `FIRSTCRY_API_DETAIL_WORKERS`: concurrent detail-page checks, default `8`
 - `FIRSTCRY_API_MAX_PAGES`: maximum pagination safety limit, default `30`
+- `FIRSTCRY_API_MIN_PARSE_RATIO`: minimum listing API completeness ratio before
+  rejecting a snapshot, default `0.95`
 - `FIRSTCRY_API_MISSING_CONFIRMATIONS`: missing snapshots required before a
   returning product alerts as restocked, default `2`
 - `FLASK_PORT`: experimental dashboard port, default `5000`
