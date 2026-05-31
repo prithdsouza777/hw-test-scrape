@@ -7,6 +7,8 @@ from monitor_api import (
     _decode_page,
     _build_gap_product_candidates,
     LISTING_SORT_EXPRESSIONS,
+    add_cart_action_metadata,
+    build_cart_cookie_value,
     fetch_api_products,
     fetch_known_products,
     load_watchlist_ids,
@@ -38,6 +40,14 @@ def make_page(products, expected_products, ttl_seconds=120):
 
 
 class ApiProductParsingTests(unittest.TestCase):
+    def test_cart_action_metadata_uses_firstcry_cart_cookie_format(self):
+        product = add_cart_action_metadata({"id": "22928008", "name": "Bone Shaker"})
+
+        self.assertEqual("NO^22928008^1^0", build_cart_cookie_value("22928008"))
+        self.assertEqual("NO^22928008^1^0", product["cart_cookie"])
+        self.assertEqual("_$FC$_cookies_for_cart_v2_", product["cart_cookie_name"])
+        self.assertEqual("https://www.firstcry.com/cart", product["cart_url"])
+
     def test_parse_api_product_uses_current_stock_quantity(self):
         product = parse_api_product(
             make_raw_product("123", stock="4", name="Hot Wheels Red & Blue Car")

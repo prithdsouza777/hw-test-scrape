@@ -61,8 +61,28 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertEqual(276, payload["catalog_count"])
         self.assertEqual(120, payload["listing_ttl_seconds"])
         self.assertEqual(3, payload["products"]["1"]["stock_count"])
+        self.assertEqual("NO^1^1^0", payload["products"]["1"]["cart_cookie"])
+        self.assertEqual(
+            "_$FC$_cookies_for_cart_v2_",
+            payload["products"]["1"]["cart_cookie_name"],
+        )
+        self.assertEqual(
+            "https://www.firstcry.com/cart",
+            payload["products"]["1"]["cart_url"],
+        )
         self.assertEqual(1, payload["pending_count"])
         self.assertEqual(0, payload["pending_products"]["2"]["cart_product_count"])
+        self.assertEqual("NO^2^1^0", payload["pending_products"]["2"]["cart_cookie"])
+
+    def test_dashboard_uses_cart_acceptance_language_and_action(self):
+        response = self.client.get("/")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("Buyability Monitor", html)
+        self.assertIn("Cart Accepted", html)
+        self.assertIn("ADD TO CART", html)
+        self.assertNotIn("OPEN PRODUCT", html)
 
 
 if __name__ == "__main__":
