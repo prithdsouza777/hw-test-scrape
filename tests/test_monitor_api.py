@@ -8,6 +8,7 @@ from monitor_api import (
     fetch_api_products,
     parse_cart_product_count,
     parse_api_product,
+    parse_detail_api_stock_count,
     parse_detail_stock_count,
     verify_in_stock_products,
 )
@@ -100,6 +101,41 @@ class ApiProductParsingTests(unittest.TestCase):
         )
 
         self.assertEqual(2, parse_detail_stock_count(html, "123"))
+
+    def test_parse_detail_api_stock_count_reads_current_product_stock(self):
+        payload = {
+            "PInfo": {"pid": 123, "CurSt": 0},
+            "PColor": [{"pid": 123, "CS": 3, "pn": "Car"}],
+        }
+
+        self.assertEqual(3, parse_detail_api_stock_count(payload, "123"))
+
+    def test_parse_detail_api_stock_count_uses_matching_product_info_fallback(self):
+        payload = {
+            "PInfo": {"pid": 123, "CurSt": 2},
+            "PColor": [{"pid": 456, "CS": 5, "pn": "Other Car"}],
+        }
+
+        self.assertEqual(2, parse_detail_api_stock_count(payload, "123"))
+
+    def test_parse_detail_api_stock_count_rejects_mismatched_product_data(self):
+        payload = {
+            "PInfo": {"pid": 456, "CurSt": 2},
+            "PColor": [{"pid": 789, "CS": 5, "pn": "Other Car"}],
+        }
+
+        with self.assertRaisesRegex(ApiScrapeError, "mismatched product data"):
+            parse_detail_api_stock_count(payload, "123")
+
+    def test_parse_detail_stock_count_accepts_direct_product_api_json(self):
+        payload = json.dumps(
+            {
+                "PInfo": {"pid": 123, "CurSt": 0},
+                "PColor": [{"pid": 123, "CS": 4, "pn": "Car"}],
+            }
+        )
+
+        self.assertEqual(4, parse_detail_stock_count(payload, "123"))
 
     def test_parse_detail_stock_count_does_not_trust_stale_curst(self):
         html = (
@@ -229,7 +265,7 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual(0, products["1"]["stock_count"])
         self.assertEqual(0, products["1"]["detail_stock_count"])
         self.assertEqual(
-            "detail_page_current_product_cs",
+            "product_api_current_stock",
             products["1"]["stock_signal"],
         )
         self.assertTrue(products["2"]["in_stock"])
