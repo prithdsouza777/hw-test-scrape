@@ -1,19 +1,54 @@
 (function () {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('hw_auto_add') !== '1') {
-        return;
-    }
-    if (window.__hotWheelsMonitorAutoAddStarted) {
-        return;
-    }
-    window.__hotWheelsMonitorAutoAddStarted = true;
-
     const checkoutUrl = 'https://checkout.firstcry.com/pay';
-    const requestedProductId = params.get('hw_pid') || getProductIdFromPath();
+    const request = readAutoAddRequest();
+
+    if (!request.enabled || !request.productId) {
+        return;
+    }
+
+    const root = document.documentElement;
+    root.setAttribute('data-hw-monitor-helper', 'loaded');
+    root.setAttribute('data-hw-monitor-pid', request.productId);
+
+    injectPageRunner();
+    window.setTimeout(() => {
+        const state = root.getAttribute('data-hw-monitor-auto-cart');
+        if (state === 'running' || state === 'done') {
+            return;
+        }
+
+        runDomFallback(0);
+    }, 900);
+
+    function readAutoAddRequest() {
+        const searchParams = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+        const enabled =
+            searchParams.get('hw_auto_add') === '1' ||
+            hashParams.get('hw_auto_add') === '1';
+        const productId =
+            searchParams.get('hw_pid') ||
+            hashParams.get('hw_pid') ||
+            getProductIdFromPath();
+
+        return { enabled, productId };
+    }
 
     function getProductIdFromPath() {
         const match = window.location.pathname.match(/\/(\d+)\/product-detail/i);
         return match ? match[1] : '';
+    }
+
+    function injectPageRunner() {
+        if (!chrome.runtime || typeof chrome.runtime.getURL !== 'function') {
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = chrome.runtime.getURL('page_auto_cart.js');
+        script.dataset.hwMonitorAutoCart = '1';
+        script.onload = () => script.remove();
+        (document.head || document.documentElement).appendChild(script);
     }
 
     function readCookie(name) {
@@ -26,28 +61,7 @@
     }
 
     function productIsInCart() {
-        if (!requestedProductId) {
-            return false;
-        }
-        return readCookie('_$FC$_cookies_for_cart_v2_').includes(`NO^${requestedProductId}^`);
-    }
-
-    function currentProductIsReady() {
-        if (!requestedProductId) {
-            return false;
-        }
-        if (typeof CurrentProductID === 'undefined') {
-            return false;
-        }
-        return String(CurrentProductID) === String(requestedProductId);
-    }
-
-    function findAddButton() {
-        return findVisible('.add_to_cart');
-    }
-
-    function findGoToCartButton() {
-        return findVisible('.go_to_cart,.gcart,.go_to_cart_prod,.gotoccart');
+        return readCookie('_$FC$_cookies_for_cart_v2_').includes(`NO^${request.productId}^`);
     }
 
     function findVisible(selector) {
@@ -61,97 +75,61 @@
         element.click();
     }
 
-    function addUsingFirstCryFlow() {
-        const addButton = findAddButton();
-        if (addButton) {
-            clickElement(addButton);
-            return true;
-        }
-
-        if (typeof AddProductToCart === 'function') {
-            AddProductToCart();
-            if (typeof addtocartbutton === 'function') {
-                addtocartbutton();
-            }
-            return true;
-        }
-
-        if (typeof AddToCart === 'function') {
-            AddToCart(requestedProductId, '1', 'NO', '0', true, false, false);
-            return true;
-        }
-
-        return false;
-    }
-
-    function checkoutTarget() {
-        if (typeof cartpdpurl !== 'undefined' && cartpdpurl) {
-            return cartpdpurl;
-        }
-
-        return checkoutUrl;
-    }
-
-    function forceCheckoutIfStillOnProductPage() {
-        window.setTimeout(() => {
-            if (/\/product-detail/i.test(window.location.pathname)) {
-                window.location.href = checkoutTarget();
-            }
-        }, 700);
-    }
-
-    function goToCartOrCheckout() {
-        const goToCartButton = findGoToCartButton();
+    function goToCheckout() {
+        const goToCartButton = findVisible('.go_to_cart,.gcart,.go_to_cart_prod,.gotoccart');
         if (goToCartButton) {
             clickElement(goToCartButton);
-            forceCheckoutIfStillOnProductPage();
+            window.setTimeout(() => {
+                if (/\/product-detail/i.test(window.location.pathname)) {
+                    window.location.href = checkoutUrl;
+                }
+            }, 700);
             return;
         }
 
-        window.location.href = checkoutTarget();
+        window.location.href = checkoutUrl;
     }
 
     function waitForCartThenGo(attempt) {
-        if (productIsInCart() || findGoToCartButton()) {
-            goToCartOrCheckout();
+        if (productIsInCart() || findVisible('.go_to_cart,.gcart,.go_to_cart_prod,.gotoccart')) {
+            root.setAttribute('data-hw-monitor-auto-cart', 'done');
+            goToCheckout();
             return;
         }
 
         if (attempt >= 80) {
+            root.setAttribute('data-hw-monitor-auto-cart', 'failed');
             return;
         }
 
         window.setTimeout(() => waitForCartThenGo(attempt + 1), 200);
     }
 
-    function waitForFirstCryProduct(attempt) {
+    function runDomFallback(attempt) {
         if (!/\/product-detail/i.test(window.location.pathname)) {
             return;
         }
 
-        const canAdd =
-            findAddButton() ||
-            typeof AddProductToCart === 'function' ||
-            typeof AddToCart === 'function';
-
-        if (currentProductIsReady() && canAdd) {
-            if (productIsInCart()) {
-                goToCartOrCheckout();
-                return;
-            }
-
-            if (addUsingFirstCryFlow()) {
-                waitForCartThenGo(0);
-                return;
-            }
-        }
-
-        if (attempt >= 80) {
+        if (productIsInCart()) {
+            root.setAttribute('data-hw-monitor-auto-cart', 'done');
+            goToCheckout();
             return;
         }
 
-        window.setTimeout(() => waitForFirstCryProduct(attempt + 1), 250);
-    }
+        const addButton = findVisible('.add_to_cart');
+        if (addButton) {
+            root.setAttribute('data-hw-monitor-auto-cart', 'running');
+            root.setAttribute('data-hw-monitor-auto-cart-owner', 'content-dom');
+            clickElement(addButton);
+            waitForCartThenGo(0);
+            return;
+        }
 
-    waitForFirstCryProduct(0);
+        if (attempt >= 80) {
+            root.setAttribute('data-hw-monitor-auto-cart', 'failed');
+            return;
+        }
+
+        window.setTimeout(() => runDomFallback(attempt + 1), 250);
+    }
 })();

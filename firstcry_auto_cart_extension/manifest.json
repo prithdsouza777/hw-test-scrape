@@ -6,13 +6,24 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.firstcry.com/*"
+        "https://www.firstcry.com/*",
+        "https://firstcry.com/*"
       ],
       "js": [
         "content.js"
       ],
-      "run_at": "document_idle",
-      "world": "MAIN"
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "page_auto_cart.js"
+      ],
+      "matches": [
+        "https://www.firstcry.com/*",
+        "https://firstcry.com/*"
+      ]
     }
   ]
 }
