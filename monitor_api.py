@@ -93,8 +93,16 @@ MIN_API_PARSE_RATIO = _env_float("FIRSTCRY_API_MIN_PARSE_RATIO", 0.95)
 MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
 LISTING_SORT_EXPRESSIONS = _env_list(
     "FIRSTCRY_API_SORT_EXPRESSIONS",
-    "popularity,newarrivals",
+    "popularity,NewArrivals,HighestDiscount,Rating",
 )
+VERIFY_GAP_PRODUCTS = os.getenv("FIRSTCRY_API_DISCOVER_GAP_PRODUCTS", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+GAP_PRODUCT_MAX_GAP = _env_int("FIRSTCRY_API_GAP_PRODUCT_MAX_GAP", 20)
+GAP_PRODUCT_MAX_CANDIDATES = _env_int("FIRSTCRY_API_GAP_PRODUCT_MAX_CANDIDATES", 300)
+GAP_PRODUCT_WORKERS = _env_int("FIRSTCRY_API_GAP_PRODUCT_WORKERS", 12)
 VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
     "0",
     "false",
@@ -225,6 +233,33 @@ def _merge_product_signal(products, product):
         products[product["id"]] = product
 
 
+def _build_gap_product_candidates(products):
+    product_ids = sorted(
+        int(product_id)
+        for product_id in products
+        if str(product_id).isdigit()
+    )
+    candidates = set()
+    for previous_id, next_id in zip(product_ids, product_ids[1:]):
+        gap_size = next_id - previous_id
+        if 1 < gap_size <= GAP_PRODUCT_MAX_GAP:
+            candidates.update(
+                str(product_id)
+                for product_id in range(previous_id + 1, next_id)
+                if str(product_id) not in products
+            )
+
+    candidates = sorted(candidates, key=int)
+    if len(candidates) > GAP_PRODUCT_MAX_CANDIDATES:
+        LOGGER.warning(
+            "FirstCry gap discovery found %s candidates; limiting to %s",
+            len(candidates),
+            GAP_PRODUCT_MAX_CANDIDATES,
+        )
+        candidates = candidates[:GAP_PRODUCT_MAX_CANDIDATES]
+    return tuple(candidates)
+
+
 def _extract_balanced_json(text, start_index):
     depth = 0
     in_string = False
@@ -323,6 +358,37 @@ def parse_detail_stock_count(html, product_id):
     return max(0, _parse_int(stock_count))
 
 
+def parse_gap_product(payload, product_id):
+    product_id = str(product_id)
+    if not isinstance(payload, dict):
+        return None
+
+    product_info = payload.get("PInfo") or {}
+    if str(product_info.get("pid")) != product_id:
+        return None
+    if str(product_info.get("BID")) != "113":
+        return None
+
+    name = str(product_info.get("pnm") or "").strip()
+    if not name or "hot wheel" not in name.lower():
+        return None
+
+    stock_count = parse_detail_api_stock_count(payload, product_id)
+    if stock_count <= 0:
+        return None
+
+    return {
+        "id": product_id,
+        "name": name,
+        "in_stock": True,
+        "stock_count": stock_count,
+        "detail_stock_count": stock_count,
+        "link": _build_product_link(product_id, name),
+        "image": _build_image_url(product_info.get("Img")),
+        "stock_signal": "gap_product_api",
+    }
+
+
 def fetch_detail_stock_count(product, opener=urlopen):
     request = Request(
         PRODUCT_DETAIL_API_URL.format(product_id=product["id"]),
@@ -339,6 +405,26 @@ def fetch_detail_stock_count(product, opener=urlopen):
             return parse_detail_stock_count(html, product["id"])
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(f"FirstCry product detail request failed: {exc}") from exc
+
+
+def fetch_gap_product(product_id, opener=urlopen):
+    request = Request(
+        PRODUCT_DETAIL_API_URL.format(product_id=product_id),
+        headers={
+            "Accept": "application/json",
+            "Referer": LISTING_URL,
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=DETAIL_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            return parse_gap_product(payload, product_id)
+    except json.JSONDecodeError as exc:
+        raise ApiScrapeError("FirstCry gap product API returned invalid JSON") from exc
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry gap product request failed: {exc}") from exc
 
 
 def parse_cart_product_count(raw_response):
@@ -374,6 +460,41 @@ def fetch_cart_product_count(product, opener=urlopen):
             )
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(f"FirstCry cart API request failed: {exc}") from exc
+
+
+def fetch_gap_products(products, product_fetcher=fetch_gap_product):
+    candidate_ids = _build_gap_product_candidates(products)
+    if not candidate_ids:
+        return {}
+
+    discovered_products = {}
+    max_workers = min(GAP_PRODUCT_WORKERS, len(candidate_ids))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(product_fetcher, product_id): product_id
+            for product_id in candidate_ids
+        }
+        for future in as_completed(futures):
+            product_id = futures[future]
+            try:
+                product = future.result()
+            except ApiScrapeError as exc:
+                LOGGER.debug(
+                    "Could not inspect FirstCry gap product %s: %s",
+                    product_id,
+                    exc,
+                )
+                continue
+            if product is not None:
+                discovered_products[product["id"]] = product
+
+    if discovered_products:
+        LOGGER.info(
+            "Discovered %s in-stock Hot Wheels products from %s gap candidates",
+            len(discovered_products),
+            len(candidate_ids),
+        )
+    return discovered_products
 
 
 _DEFAULT_CART_FETCHER = object()
@@ -507,6 +628,7 @@ def fetch_api_page(page_number, opener=urlopen, sort_expression=None):
 
 
 _DEFAULT_DETAIL_VERIFIER = object()
+_DEFAULT_GAP_FETCHER = object()
 
 
 def _fetch_listing_products(page_fetcher, sort_expression):
@@ -569,6 +691,7 @@ def fetch_api_products(
     page_fetcher=fetch_api_page,
     detail_verifier=_DEFAULT_DETAIL_VERIFIER,
     sort_expressions=None,
+    gap_product_fetcher=_DEFAULT_GAP_FETCHER,
 ):
     started_at = time.monotonic()
     supports_sort_expression = _supports_sort_expression(page_fetcher)
@@ -610,6 +733,16 @@ def fetch_api_products(
     for raw_product in raw_products:
         product = parse_api_product(raw_product)
         _merge_product_signal(products, product)
+
+    if gap_product_fetcher is _DEFAULT_GAP_FETCHER:
+        gap_product_fetcher = (
+            fetch_gap_products
+            if VERIFY_GAP_PRODUCTS and page_fetcher is fetch_api_page
+            else None
+        )
+    if gap_product_fetcher is not None:
+        for product in gap_product_fetcher(products).values():
+            _merge_product_signal(products, product)
 
     if detail_verifier is _DEFAULT_DETAIL_VERIFIER:
         detail_verifier = verify_in_stock_products if VERIFY_DETAIL_STOCK else None
