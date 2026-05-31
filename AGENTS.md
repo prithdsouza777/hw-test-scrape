@@ -35,6 +35,8 @@ a failed scrape must not be treated as a real out-of-stock event.
 - Keep dashboard product actions as normal browser links. The `ADD TO CART`
   dashboard action should open the FirstCry product page in a new tab using the
   user's existing browser session, not launch Selenium or a separate browser.
+  Auto-add and checkout redirect behavior is handled by the local
+  `firstcry_auto_cart_extension` Chrome extension running on `firstcry.com`.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose

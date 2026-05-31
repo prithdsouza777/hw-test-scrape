@@ -49,6 +49,14 @@ browser automation flow.
 FirstCry's checkout/cart page for an already-added product is
 `https://checkout.firstcry.com/pay`.
 
+To make that new FirstCry tab auto-add the product and continue to checkout,
+load the local unpacked Chrome extension in `firstcry_auto_cart_extension`.
+The dashboard appends `hw_auto_add=1&hw_checkout=1&hw_pid={product_id}` to its
+product links; the extension sees that flag on `firstcry.com`, calls
+FirstCry's own `AddToCart(pid, 1, "NO", "0", ...)`, then redirects the tab to
+`https://checkout.firstcry.com/pay`. Without the extension, the same link still
+opens the product page normally.
+
 ## Run
 
 Double-click `run.bat`, then open:
