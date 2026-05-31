@@ -8,6 +8,7 @@ from monitor_api import (
     _build_gap_product_candidates,
     LISTING_SORT_EXPRESSIONS,
     add_cart_action_metadata,
+    build_auto_add_link,
     build_cart_cookie_value,
     fetch_api_products,
     fetch_known_products,
@@ -41,12 +42,40 @@ def make_page(products, expected_products, ttl_seconds=120):
 
 class ApiProductParsingTests(unittest.TestCase):
     def test_cart_action_metadata_uses_firstcry_cart_cookie_format(self):
-        product = add_cart_action_metadata({"id": "22928008", "name": "Bone Shaker"})
+        product = add_cart_action_metadata(
+            {
+                "id": "22928008",
+                "name": "Bone Shaker",
+                "link": (
+                    "https://www.firstcry.com/hot-wheels/bone-shaker/"
+                    "22928008/product-detail"
+                ),
+            }
+        )
 
         self.assertEqual("NO^22928008^1^0", build_cart_cookie_value("22928008"))
         self.assertEqual("NO^22928008^1^0", product["cart_cookie"])
         self.assertEqual("_$FC$_cookies_for_cart_v2_", product["cart_cookie_name"])
         self.assertEqual("https://checkout.firstcry.com/pay", product["cart_url"])
+        self.assertIn("hw_auto_add=1", product["add_to_cart_link"])
+        self.assertIn("hw_checkout=1", product["add_to_cart_link"])
+        self.assertIn("hw_pid=22928008", product["add_to_cart_link"])
+
+    def test_build_auto_add_link_preserves_existing_query_parameters(self):
+        link = build_auto_add_link(
+            {
+                "id": "23074890",
+                "link": (
+                    "https://www.firstcry.com/hot-wheels/quick-chat/"
+                    "23074890/product-detail?ref2=dashboard"
+                ),
+            }
+        )
+
+        self.assertIn("ref2=dashboard", link)
+        self.assertIn("hw_auto_add=1", link)
+        self.assertIn("hw_checkout=1", link)
+        self.assertIn("hw_pid=23074890", link)
 
     def test_parse_api_product_uses_current_stock_quantity(self):
         product = parse_api_product(

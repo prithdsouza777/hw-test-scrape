@@ -87,6 +87,12 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertNotIn("Selenium", html)
         self.assertNotIn("OPEN PRODUCT", html)
 
+        response = self.client.get("/api/data")
+        payload = response.get_json()
+        self.assertIn("hw_auto_add=1", payload["products"]["1"]["add_to_cart_link"])
+        self.assertIn("hw_checkout=1", payload["products"]["1"]["add_to_cart_link"])
+        self.assertIn("hw_pid=1", payload["products"]["1"]["add_to_cart_link"])
+
 
 if __name__ == "__main__":
     unittest.main()
