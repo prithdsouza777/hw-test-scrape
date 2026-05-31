@@ -4,3 +4,5 @@ __pycache__/
 *.py[cod]
 selenium_profile/
 log.xlsx
+known_products.json
+watchlist.txt
