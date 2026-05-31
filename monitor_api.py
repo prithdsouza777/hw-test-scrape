@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from inspect import Parameter, signature
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -39,6 +40,8 @@ PAGE_SIZE = 20
 CURRENT_PRODUCT_DETAIL_JSON_PATTERN = re.compile(
     r"(?:^|[;,]|\bvar\s+)\s*CurrentProductDetailJSON\s*="
 )
+PRODUCT_ID_PATTERN = re.compile(r"(?:/|^)(\d{5,})(?:/product-detail\b|$)")
+STANDALONE_PRODUCT_ID_PATTERN = re.compile(r"\b\d{5,}\b")
 
 
 class ApiScrapeError(RuntimeError):
@@ -103,6 +106,25 @@ VERIFY_GAP_PRODUCTS = os.getenv("FIRSTCRY_API_DISCOVER_GAP_PRODUCTS", "1").lower
 GAP_PRODUCT_MAX_GAP = _env_int("FIRSTCRY_API_GAP_PRODUCT_MAX_GAP", 20)
 GAP_PRODUCT_MAX_CANDIDATES = _env_int("FIRSTCRY_API_GAP_PRODUCT_MAX_CANDIDATES", 300)
 GAP_PRODUCT_WORKERS = _env_int("FIRSTCRY_API_GAP_PRODUCT_WORKERS", 12)
+VERIFY_KNOWN_PRODUCTS = os.getenv("FIRSTCRY_API_PROBE_KNOWN_PRODUCTS", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+KNOWN_PRODUCT_WORKERS = _env_int("FIRSTCRY_API_KNOWN_PRODUCT_WORKERS", 12)
+KNOWN_PRODUCT_MAX_IDS = _env_int("FIRSTCRY_API_KNOWN_PRODUCT_MAX_IDS", 1000)
+KNOWN_PRODUCTS_PATH = Path(
+    os.getenv(
+        "FIRSTCRY_API_KNOWN_PRODUCTS_FILE",
+        Path(__file__).with_name("known_products.json"),
+    )
+)
+WATCHLIST_PATH = Path(
+    os.getenv(
+        "FIRSTCRY_API_WATCHLIST_FILE",
+        Path(__file__).with_name("watchlist.txt"),
+    )
+)
 VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
     "0",
     "false",
@@ -215,6 +237,39 @@ def _build_image_url(images):
     return IMAGE_BASE_URL + image_name
 
 
+def _extract_product_ids(value):
+    text = str(value or "")
+    product_ids = set(PRODUCT_ID_PATTERN.findall(text))
+    product_ids.update(STANDALONE_PRODUCT_ID_PATTERN.findall(text))
+    return {product_id for product_id in product_ids if product_id.isdigit()}
+
+
+def _product_id_sort_key(product_id):
+    return int(product_id) if str(product_id).isdigit() else str(product_id)
+
+
+def _normalise_known_product(product):
+    if not isinstance(product, dict):
+        return None
+
+    product_id = str(product.get("id") or product.get("pid") or "").strip()
+    if not product_id.isdigit():
+        return None
+
+    name = str(product.get("name") or product.get("pnm") or "").strip()
+    link = str(product.get("link") or "").strip()
+    image = str(product.get("image") or "").strip()
+    return {
+        "id": product_id,
+        "name": name or f"Hot Wheels Product {product_id}",
+        "in_stock": bool(product.get("in_stock", False)),
+        "stock_count": max(0, _parse_int(product.get("stock_count"))),
+        "link": link or _build_product_link(product_id, name),
+        "image": image,
+        "stock_signal": product.get("stock_signal", "known_product_store"),
+    }
+
+
 def _supports_sort_expression(page_fetcher):
     try:
         parameters = signature(page_fetcher).parameters.values()
@@ -258,6 +313,61 @@ def _build_gap_product_candidates(products):
         )
         candidates = candidates[:GAP_PRODUCT_MAX_CANDIDATES]
     return tuple(candidates)
+
+
+def load_known_products(path=KNOWN_PRODUCTS_PATH):
+    if not path.exists():
+        return {}
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Could not read known product store %s: %s", path, exc)
+        return {}
+
+    raw_products = payload.values() if isinstance(payload, dict) else payload
+    if not isinstance(raw_products, list) and not hasattr(raw_products, "__iter__"):
+        LOGGER.warning("Ignoring unexpected known product store format in %s", path)
+        return {}
+
+    known_products = {}
+    for raw_product in raw_products:
+        product = _normalise_known_product(raw_product)
+        if product is not None:
+            known_products[product["id"]] = product
+    return known_products
+
+
+def save_known_products(products, path=KNOWN_PRODUCTS_PATH):
+    existing_products = load_known_products(path)
+    for product in products.values():
+        normalised_product = _normalise_known_product(product)
+        if normalised_product is not None:
+            existing_products[normalised_product["id"]] = {
+                "id": normalised_product["id"],
+                "name": normalised_product["name"],
+                "link": normalised_product["link"],
+                "image": normalised_product["image"],
+            }
+
+    try:
+        path.write_text(
+            json.dumps(existing_products, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        LOGGER.warning("Could not update known product store %s: %s", path, exc)
+
+
+def load_watchlist_ids(path=WATCHLIST_PATH):
+    if not path.exists():
+        return set()
+
+    try:
+        return _extract_product_ids(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        LOGGER.warning("Could not read watchlist %s: %s", path, exc)
+        return set()
 
 
 def _extract_balanced_json(text, start_index):
@@ -359,6 +469,18 @@ def parse_detail_stock_count(html, product_id):
 
 
 def parse_gap_product(payload, product_id):
+    product = parse_known_product(payload, product_id)
+    if product is None or product["stock_count"] <= 0:
+        return None
+
+    return {
+        **product,
+        "in_stock": True,
+        "stock_signal": "gap_product_api",
+    }
+
+
+def parse_known_product(payload, product_id):
     product_id = str(product_id)
     if not isinstance(payload, dict):
         return None
@@ -373,19 +495,20 @@ def parse_gap_product(payload, product_id):
     if not name or "hot wheel" not in name.lower():
         return None
 
-    stock_count = parse_detail_api_stock_count(payload, product_id)
-    if stock_count <= 0:
+    try:
+        stock_count = parse_detail_api_stock_count(payload, product_id)
+    except ApiScrapeError:
         return None
 
     return {
         "id": product_id,
         "name": name,
-        "in_stock": True,
+        "in_stock": stock_count > 0,
         "stock_count": stock_count,
         "detail_stock_count": stock_count,
         "link": _build_product_link(product_id, name),
         "image": _build_image_url(product_info.get("Img")),
-        "stock_signal": "gap_product_api",
+        "stock_signal": "known_product_api",
     }
 
 
@@ -425,6 +548,26 @@ def fetch_gap_product(product_id, opener=urlopen):
         raise ApiScrapeError("FirstCry gap product API returned invalid JSON") from exc
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(f"FirstCry gap product request failed: {exc}") from exc
+
+
+def fetch_known_product_detail(product_id, opener=urlopen):
+    request = Request(
+        PRODUCT_DETAIL_API_URL.format(product_id=product_id),
+        headers={
+            "Accept": "application/json",
+            "Referer": LISTING_URL,
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=DETAIL_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            return parse_known_product(payload, product_id)
+    except json.JSONDecodeError as exc:
+        raise ApiScrapeError("FirstCry known product API returned invalid JSON") from exc
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry known product request failed: {exc}") from exc
 
 
 def parse_cart_product_count(raw_response):
@@ -493,6 +636,127 @@ def fetch_gap_products(products, product_fetcher=fetch_gap_product):
             "Discovered %s in-stock Hot Wheels products from %s gap candidates",
             len(discovered_products),
             len(candidate_ids),
+        )
+    return discovered_products
+
+
+def _build_known_product_probe_map(products, known_products, watchlist_ids):
+    probe_products = {}
+    for product in known_products.values():
+        normalised_product = _normalise_known_product(product)
+        if normalised_product is not None:
+            probe_products[normalised_product["id"]] = normalised_product
+    for product_id in watchlist_ids:
+        if str(product_id).isdigit():
+            probe_products.setdefault(str(product_id), None)
+    for product_id, product in products.items():
+        if not product.get("in_stock"):
+            probe_products[str(product_id)] = product
+
+    probe_ids = sorted(probe_products, key=_product_id_sort_key)
+    if len(probe_ids) > KNOWN_PRODUCT_MAX_IDS:
+        LOGGER.warning(
+            "FirstCry known product probing found %s IDs; limiting to %s",
+            len(probe_ids),
+            KNOWN_PRODUCT_MAX_IDS,
+        )
+        probe_ids = probe_ids[:KNOWN_PRODUCT_MAX_IDS]
+    return {product_id: probe_products[product_id] for product_id in probe_ids}
+
+
+def _probe_known_product(product_id, product, product_fetcher, cart_fetcher):
+    if product is None or not product.get("name") or not product.get("link"):
+        product = product_fetcher(product_id)
+    else:
+        product = {**product, "id": str(product_id)}
+
+    if product is None:
+        return None
+
+    try:
+        cart_product_count = cart_fetcher(product)
+    except ApiScrapeError as exc:
+        if product.get("detail_stock_count", 0) > 0:
+            return {
+                **product,
+                "pending_cart": True,
+                "stock_signal": "known_product_cart_error",
+            }
+        raise exc
+
+    detail_stock_count = max(0, _parse_int(product.get("detail_stock_count")))
+    if cart_product_count > 0:
+        return {
+            **product,
+            "in_stock": True,
+            "stock_count": max(detail_stock_count, cart_product_count),
+            "cart_product_count": cart_product_count,
+            "stock_signal": "known_product_cart_count",
+        }
+    if detail_stock_count > 0:
+        return {
+            **product,
+            "in_stock": False,
+            "stock_count": 0,
+            "cart_product_count": cart_product_count,
+            "pending_cart": True,
+            "stock_signal": "known_product_cart_pending",
+        }
+    return None
+
+
+def fetch_known_products(
+    products,
+    known_products=None,
+    watchlist_ids=None,
+    product_fetcher=fetch_known_product_detail,
+    cart_fetcher=fetch_cart_product_count,
+):
+    if known_products is None:
+        known_products = load_known_products()
+    if watchlist_ids is None:
+        watchlist_ids = load_watchlist_ids()
+
+    probe_products = _build_known_product_probe_map(
+        products,
+        known_products,
+        watchlist_ids,
+    )
+    if not probe_products:
+        return {}
+
+    discovered_products = {}
+    max_workers = min(KNOWN_PRODUCT_WORKERS, len(probe_products))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _probe_known_product,
+                product_id,
+                product,
+                product_fetcher,
+                cart_fetcher,
+            ): product_id
+            for product_id, product in probe_products.items()
+        }
+        for future in as_completed(futures):
+            product_id = futures[future]
+            try:
+                product = future.result()
+            except ApiScrapeError as exc:
+                LOGGER.debug(
+                    "Could not cart-probe known FirstCry product %s: %s",
+                    product_id,
+                    exc,
+                )
+                continue
+            if product is not None:
+                discovered_products[product["id"]] = product
+
+    if discovered_products:
+        LOGGER.info(
+            "Cart-probed %s known FirstCry products; %s are buyable or pending",
+            len(probe_products),
+            len(discovered_products),
         )
     return discovered_products
 
@@ -629,6 +893,7 @@ def fetch_api_page(page_number, opener=urlopen, sort_expression=None):
 
 _DEFAULT_DETAIL_VERIFIER = object()
 _DEFAULT_GAP_FETCHER = object()
+_DEFAULT_KNOWN_FETCHER = object()
 
 
 def _fetch_listing_products(page_fetcher, sort_expression):
@@ -692,6 +957,7 @@ def fetch_api_products(
     detail_verifier=_DEFAULT_DETAIL_VERIFIER,
     sort_expressions=None,
     gap_product_fetcher=_DEFAULT_GAP_FETCHER,
+    known_product_fetcher=_DEFAULT_KNOWN_FETCHER,
 ):
     started_at = time.monotonic()
     supports_sort_expression = _supports_sort_expression(page_fetcher)
@@ -748,6 +1014,19 @@ def fetch_api_products(
         detail_verifier = verify_in_stock_products if VERIFY_DETAIL_STOCK else None
     if detail_verifier is not None:
         products = detail_verifier(products)
+
+    if known_product_fetcher is _DEFAULT_KNOWN_FETCHER:
+        known_product_fetcher = (
+            fetch_known_products
+            if VERIFY_KNOWN_PRODUCTS and page_fetcher is fetch_api_page
+            else None
+        )
+    if known_product_fetcher is not None:
+        for product in known_product_fetcher(products).values():
+            _merge_product_signal(products, product)
+
+    if page_fetcher is fetch_api_page:
+        save_known_products(products)
 
     elapsed_seconds = time.monotonic() - started_at
     result = ApiFetchResult(
