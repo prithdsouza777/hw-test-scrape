@@ -2,6 +2,7 @@ import datetime
 import logging
 import os
 from pathlib import Path
+import tempfile
 import threading
 import time
 
@@ -59,15 +60,32 @@ def _decorate_snapshot_products(snapshot):
     return snapshot
 
 
-def _create_cart_driver():
-    from selenium import webdriver
+def _cart_driver_options(profile_path):
     from selenium.webdriver.chrome.options import Options
 
     options = Options()
-    options.add_argument(f"--user-data-dir={CART_BROWSER_PROFILE_PATH}")
+    options.add_argument(f"--user-data-dir={profile_path}")
     options.add_argument("--disable-notifications")
     options.add_argument("--start-maximized")
-    return webdriver.Chrome(options=options)
+    return options
+
+
+def _create_cart_driver():
+    from selenium import webdriver
+
+    try:
+        return webdriver.Chrome(options=_cart_driver_options(CART_BROWSER_PROFILE_PATH))
+    except Exception:
+        fallback_profile = Path(tempfile.gettempdir()) / (
+            f"firstcry_cart_profile_{os.getpid()}"
+        )
+        LOGGER.warning(
+            "Could not open Selenium profile %s; using temporary profile %s",
+            CART_BROWSER_PROFILE_PATH,
+            fallback_profile,
+            exc_info=True,
+        )
+        return webdriver.Chrome(options=_cart_driver_options(fallback_profile))
 
 
 def _get_cart_driver():
@@ -85,10 +103,24 @@ def _get_cart_driver():
         return cart_driver
 
 
+def _open_new_cart_tab(driver):
+    current_url = ""
+    try:
+        current_url = driver.current_url
+    except Exception:
+        pass
+
+    if len(driver.window_handles) == 1 and current_url in {"about:blank", "data:,"}:
+        return
+
+    driver.switch_to.new_window("tab")
+
+
 def add_product_to_firstcry_cart(product):
     product_id = str(product["id"])
     driver = _get_cart_driver()
 
+    _open_new_cart_tab(driver)
     driver.get("https://www.firstcry.com/")
     existing_cookie = driver.get_cookie(FIRSTCRY_CART_COOKIE_NAME)
     existing_value = existing_cookie["value"] if existing_cookie else ""
