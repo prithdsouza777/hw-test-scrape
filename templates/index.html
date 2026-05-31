@@ -166,6 +166,16 @@
             color: #e0e0e0;
         }
 
+        .product-link.add-to-cart[data-cart-state="pending"] {
+            opacity: 0.75;
+            pointer-events: none;
+        }
+
+        .product-link.add-to-cart[data-cart-state="failed"] {
+            background: #cf6679;
+            color: #000;
+        }
+
         .product-link.secondary {
             background: #bb86fc;
             color: #000;
@@ -470,9 +480,14 @@
 
         function createAddToCartButton(product) {
             const link = createProductLink(product, 'ADD TO CART');
-            link.href = product.add_to_cart_link || product.link;
+            link.href = product.cart_url;
             link.className = 'product-link add-to-cart';
-            link.title = 'Cart API accepted this product. Opens FirstCry, auto-adds with the helper extension, then goes to checkout.';
+            link.dataset.firstcryCartAction = 'add';
+            link.dataset.productId = product.id;
+            link.dataset.productName = product.name;
+            link.dataset.productUrl = product.link;
+            link.dataset.productImage = product.image || '';
+            link.title = 'Cart API accepted this product. The helper extension uses the recent-order add-to-cart path and opens checkout.';
             return link;
         }
 
