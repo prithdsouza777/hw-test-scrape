@@ -18,6 +18,7 @@ from monitor_api import (
     parse_detail_stock_count,
     parse_gap_product,
     parse_known_product,
+    merge_cart_cookie_value,
     verify_in_stock_products,
 )
 
@@ -47,6 +48,16 @@ class ApiProductParsingTests(unittest.TestCase):
         self.assertEqual("NO^22928008^1^0", product["cart_cookie"])
         self.assertEqual("_$FC$_cookies_for_cart_v2_", product["cart_cookie_name"])
         self.assertEqual("https://www.firstcry.com/cart", product["cart_url"])
+
+    def test_merge_cart_cookie_preserves_existing_products(self):
+        cookie = merge_cart_cookie_value("NO^1^1^0*NO^2^2^0", "3")
+
+        self.assertEqual("NO^1^1^0*NO^2^2^0*NO^3^1^0", cookie)
+
+    def test_merge_cart_cookie_keeps_existing_quantity(self):
+        cookie = merge_cart_cookie_value("NO^1^3^0", "1")
+
+        self.assertEqual("NO^1^3^0", cookie)
 
     def test_parse_api_product_uses_current_stock_quantity(self):
         product = parse_api_product(

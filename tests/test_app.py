@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import app as app_module
 from product_tracker import ProductTracker
@@ -83,6 +84,27 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertIn("Cart Accepted", html)
         self.assertIn("ADD TO CART", html)
         self.assertNotIn("OPEN PRODUCT", html)
+
+    def test_add_to_cart_opens_cart_browser_for_buyable_product(self):
+        with patch.object(
+            app_module,
+            "add_product_to_firstcry_cart",
+            return_value="NO^1^1^0",
+        ) as add_to_cart:
+            response = self.client.post("/api/add-to-cart/1")
+
+        payload = response.get_json()
+        self.assertEqual(200, response.status_code)
+        self.assertTrue(payload["ok"])
+        self.assertEqual("NO^1^1^0", payload["cart_cookie"])
+        add_to_cart.assert_called_once()
+
+    def test_add_to_cart_rejects_non_buyable_product(self):
+        response = self.client.post("/api/add-to-cart/2")
+        payload = response.get_json()
+
+        self.assertEqual(409, response.status_code)
+        self.assertFalse(payload["ok"])
 
 
 if __name__ == "__main__":
