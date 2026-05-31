@@ -303,7 +303,7 @@
             <div class="stat-item">In Stock: <span id="total-count" class="stat-value">0</span></div>
             <div class="stat-item">
                 Updated: <span id="last-updated" class="stat-value">Waiting...</span>
-                <button id="sound-toggle" class="sound-toggle" onclick="toggleSound()">Sound: OFF</button>
+                <button id="sound-toggle" class="sound-toggle active" onclick="toggleSound()">Sound: ON</button>
             </div>
         </div>
 
@@ -328,20 +328,30 @@
     </div>
 
     <script>
-        let soundEnabled = false;
+        let soundEnabled = true;
         let seenAlerts = new Set();
         let firstLoad = true;
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        function toggleSound() {
-            soundEnabled = !soundEnabled;
+        function syncSoundButton() {
             const btn = document.getElementById('sound-toggle');
             btn.textContent = soundEnabled ? 'Sound: ON' : 'Sound: OFF';
             btn.classList.toggle('active', soundEnabled);
+        }
 
+        function unlockAudio() {
             if (soundEnabled && audioCtx.state === 'suspended') {
-                audioCtx.resume();
+                audioCtx.resume().catch(error => {
+                    console.warn('Audio unlock failed:', error);
+                });
             }
+        }
+
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
+            syncSoundButton();
+
+            unlockAudio();
 
             if (soundEnabled) {
                 playBell();
@@ -350,6 +360,7 @@
 
         function playBell() {
             if (!soundEnabled) return;
+            unlockAudio();
 
             const now = audioCtx.currentTime;
 
@@ -531,7 +542,10 @@
         }
 
         setInterval(updateData, 5000);
-        updateData(); 
+        window.addEventListener('pointerdown', unlockAudio, { once: true });
+        window.addEventListener('keydown', unlockAudio, { once: true });
+        syncSoundButton();
+        updateData();
     </script>
 </body>
 
