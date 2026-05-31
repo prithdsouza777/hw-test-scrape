@@ -11,8 +11,17 @@ https://www.firstcry.com/svcs/SearchResult.svc/GetSearchResultProductsPaging
 The response exposes each product's `CrntStock` quantity. For products where
 the listing API claims stock is available, the monitor also fetches the
 product-detail page and confirms `CurrentProductDetailJSON[pid].CS` before
-showing that product as in stock. This reduces the stale listing false
-positives that can happen while FirstCry is publishing a restock.
+checking FirstCry's cart product-count API with an isolated synthetic cart
+cookie. The cart check catches products that still look available on the page
+but are removed when added to cart. This check does not use or modify your
+browser cart.
+
+The dashboard separates the signals:
+
+- `In Stock`: accepted by the cart product-count API.
+- `Cart Pending`: listing/detail stock is positive, but cart validation still
+  rejects the item. These products may become cartable after FirstCry's stock
+  data finishes propagating.
 
 ## Run
 
@@ -29,9 +38,9 @@ dashboard on port `5000` while you compare signals.
 
 FirstCry's listing API response includes a server-side `TTL` value. The
 alternative monitor logs that value because the listing may serve cached stock
-data. Detail-page confirmation should remove many stale positives, but this is
-still an experimental second signal and should be compared against the existing
-Selenium monitor before replacing the current workflow.
+data. Detail-page and cart confirmation should remove many stale positives, but
+this is still an experimental second signal and should be compared against the
+existing Selenium monitor before replacing the current workflow.
 
 ## Optional Environment Variables
 
@@ -39,8 +48,11 @@ Selenium monitor before replacing the current workflow.
 - `FIRSTCRY_API_TIMEOUT`: HTTP timeout in seconds, default `20`
 - `FIRSTCRY_API_VERIFY_DETAIL_STOCK`: set to `0` to disable product-detail
   stock confirmation, default enabled
+- `FIRSTCRY_API_VERIFY_CART_STOCK`: set to `0` to disable isolated cart API
+  stock confirmation, default enabled
 - `FIRSTCRY_API_DETAIL_TIMEOUT`: product-detail HTTP timeout in seconds,
   default `10`
+- `FIRSTCRY_API_CART_TIMEOUT`: cart API HTTP timeout in seconds, default `10`
 - `FIRSTCRY_API_DETAIL_WORKERS`: concurrent detail-page checks, default `8`
 - `FIRSTCRY_API_MAX_PAGES`: maximum pagination safety limit, default `30`
 - `FIRSTCRY_API_MIN_PARSE_RATIO`: minimum listing API completeness ratio before
