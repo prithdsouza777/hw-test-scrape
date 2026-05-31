@@ -49,12 +49,13 @@ FirstCry's checkout/cart page for an already-added product is
 
 To make that new FirstCry tab auto-add the product and continue to checkout,
 load the local unpacked Chrome extension in `firstcry_auto_cart_extension`.
-The dashboard appends `hw_auto_add=1&hw_checkout=1&hw_pid={product_id}` to its
-add-to-cart links. The extension sees that flag on `firstcry.com`, clicks
-FirstCry's real `.add_to_cart` button, waits for the cart cookie or
-`GO TO CART` button, then clicks `GO TO CART` or redirects to FirstCry's
-checkout URL. If the page does not confirm the item was added, it stays on the
-product page instead of pretending the add succeeded.
+The dashboard appends `hw_auto_add=1&hw_checkout=1&hw_pid={product_id}` to the
+query string and URL hash of add-to-cart links. The extension sees that flag on
+`firstcry.com`, injects a FirstCry page runner, clicks FirstCry's real
+`.add_to_cart` button, waits for the cart cookie or `GO TO CART` button, then
+clicks `GO TO CART` or redirects to FirstCry's checkout URL. If the page does
+not confirm the item was added, it stays on the product page instead of
+pretending the add succeeded.
 
 ## Run
 

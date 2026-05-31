@@ -40,7 +40,8 @@ a failed scrape must not be treated as a real out-of-stock event.
 - Keep `VIEW PRODUCT` as a plain product-page link and `ADD TO CART` as the
   auto-add handoff. The extension should mirror FirstCry's PDP flow: click the
   real add button, wait for cart confirmation or `GO TO CART`, then continue to
-  checkout.
+  checkout. Add-to-cart links should carry helper flags in both query and hash
+  form so the extension can still detect them if FirstCry strips query params.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose
