@@ -6,6 +6,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from inspect import Parameter, signature
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -52,6 +53,7 @@ class ApiFetchResult:
     pages_fetched: int
     ttl_seconds: int | None
     elapsed_seconds: float
+    sort_expressions: tuple[str, ...] = ()
 
 
 def _env_float(name, default):
@@ -70,6 +72,17 @@ def _env_int(name, default):
         return int(default)
 
 
+def _env_list(name, default):
+    raw_value = os.getenv(name, default)
+    values = tuple(
+        value.strip() for value in raw_value.split(",") if value.strip()
+    )
+    if values:
+        return values
+    LOGGER.warning("Ignoring empty %s value; using %s", name, default)
+    return tuple(value.strip() for value in default.split(",") if value.strip())
+
+
 REQUEST_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_TIMEOUT", 20)
 DETAIL_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_DETAIL_TIMEOUT", 10)
 CART_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_CART_TIMEOUT", 10)
@@ -78,6 +91,10 @@ MAX_PAGES = _env_int("FIRSTCRY_API_MAX_PAGES", 30)
 DETAIL_WORKERS = _env_int("FIRSTCRY_API_DETAIL_WORKERS", 8)
 MIN_API_PARSE_RATIO = _env_float("FIRSTCRY_API_MIN_PARSE_RATIO", 0.95)
 MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
+LISTING_SORT_EXPRESSIONS = _env_list(
+    "FIRSTCRY_API_SORT_EXPRESSIONS",
+    "popularity,newarrivals",
+)
 VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
     "0",
     "false",
@@ -188,6 +205,24 @@ def _build_image_url(images):
         return ""
     image_name = re.sub(r"\.[^.]+$", ".webp", first_image)
     return IMAGE_BASE_URL + image_name
+
+
+def _supports_sort_expression(page_fetcher):
+    try:
+        parameters = signature(page_fetcher).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        parameter.kind == Parameter.VAR_KEYWORD
+        or parameter.name == "sort_expression"
+        for parameter in parameters
+    )
+
+
+def _merge_product_signal(products, product):
+    existing = products.get(product["id"])
+    if existing is None or product["stock_count"] > existing["stock_count"]:
+        products[product["id"]] = product
 
 
 def _extract_balanced_json(text, start_index):
@@ -451,8 +486,10 @@ def _decode_page(raw_response):
     }
 
 
-def fetch_api_page(page_number, opener=urlopen):
+def fetch_api_page(page_number, opener=urlopen, sort_expression=None):
     params = {"PageNo": page_number, **API_PARAMS}
+    if sort_expression:
+        params["SortExpression"] = sort_expression
     request = Request(
         API_URL + "?" + urlencode(params),
         headers={
@@ -472,11 +509,7 @@ def fetch_api_page(page_number, opener=urlopen):
 _DEFAULT_DETAIL_VERIFIER = object()
 
 
-def fetch_api_products(
-    page_fetcher=fetch_api_page,
-    detail_verifier=_DEFAULT_DETAIL_VERIFIER,
-):
-    started_at = time.monotonic()
+def _fetch_listing_products(page_fetcher, sort_expression):
     first_page = page_fetcher(1)
     expected_products = first_page["expected_products"]
     if expected_products is None:
@@ -517,16 +550,66 @@ def fetch_api_products(
         )
     if len(raw_products) < expected_products:
         LOGGER.warning(
-            "FirstCry listing API returned a near-complete snapshot: "
+            "FirstCry listing API returned a near-complete %s snapshot: "
             "found %s of %s products",
+            sort_expression,
             len(raw_products),
             expected_products,
         )
 
+    return {
+        "expected_products": expected_products,
+        "raw_products": raw_products,
+        "pages_fetched": len(pages),
+        "ttl_values": ttl_values,
+    }
+
+
+def fetch_api_products(
+    page_fetcher=fetch_api_page,
+    detail_verifier=_DEFAULT_DETAIL_VERIFIER,
+    sort_expressions=None,
+):
+    started_at = time.monotonic()
+    supports_sort_expression = _supports_sort_expression(page_fetcher)
+    if sort_expressions is None:
+        sort_expressions = (
+            LISTING_SORT_EXPRESSIONS
+            if supports_sort_expression
+            else (API_PARAMS["SortExpression"],)
+        )
+    sort_expressions = tuple(sort_expressions)
+    if not sort_expressions:
+        raise ApiScrapeError("At least one FirstCry listing sort expression is required")
+
+    raw_products = []
+    expected_counts = []
+    pages_fetched = 0
+    ttl_values = []
+    for sort_expression in sort_expressions:
+        if supports_sort_expression:
+            current_page_fetcher = (
+                lambda page_number, sort_expression=sort_expression: page_fetcher(
+                    page_number,
+                    sort_expression=sort_expression,
+                )
+            )
+        else:
+            current_page_fetcher = page_fetcher
+
+        snapshot = _fetch_listing_products(current_page_fetcher, sort_expression)
+        expected_counts.append(snapshot["expected_products"])
+        raw_products.extend(snapshot["raw_products"])
+        pages_fetched += snapshot["pages_fetched"]
+        ttl_values.extend(snapshot["ttl_values"])
+
+        if not supports_sort_expression:
+            break
+
     products = {}
     for raw_product in raw_products:
         product = parse_api_product(raw_product)
-        products[product["id"]] = product
+        _merge_product_signal(products, product)
 
     if detail_verifier is _DEFAULT_DETAIL_VERIFIER:
         detail_verifier = verify_in_stock_products if VERIFY_DETAIL_STOCK else None
@@ -535,19 +618,21 @@ def fetch_api_products(
 
     elapsed_seconds = time.monotonic() - started_at
     result = ApiFetchResult(
-        expected_products=expected_products,
+        expected_products=max(expected_counts),
         raw_products=len(raw_products),
         unique_products=len(products),
-        pages_fetched=len(pages),
+        pages_fetched=pages_fetched,
         ttl_seconds=min(ttl_values) if ttl_values else None,
         elapsed_seconds=elapsed_seconds,
+        sort_expressions=sort_expressions,
     )
     LOGGER.info(
-        "Fetched %s unique API products from %s raw rows across %s pages in %.1fs "
-        "(listing TTL: %s)",
+        "Fetched %s unique API products from %s raw rows across %s pages "
+        "and %s sorts in %.1fs (listing TTL: %s)",
         result.unique_products,
         result.raw_products,
         result.pages_fetched,
+        len(result.sort_expressions),
         result.elapsed_seconds,
         result.ttl_seconds if result.ttl_seconds is not None else "unknown",
     )
