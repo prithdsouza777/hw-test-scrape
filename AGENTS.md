@@ -33,9 +33,9 @@ a failed scrape must not be treated as a real out-of-stock event.
   listing stock, and product API stock are secondary because they can lag behind
   or get ahead of the cart system.
 - Be explicit about browser-domain limits for cart actions. A local dashboard
-  cannot directly set `firstcry.com` cart cookies unless the action is handed
-  off to a FirstCry page or the user provides an authenticated same-domain
-  mechanism.
+  cannot directly set `firstcry.com` cart cookies in the user's normal browser
+  tab; the supported dashboard cart action uses Selenium with
+  `selenium_profile` to open a real FirstCry cart window.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose
