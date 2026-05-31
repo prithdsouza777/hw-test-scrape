@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from inspect import Parameter, signature
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from colorama import Fore, Style, init
@@ -243,34 +243,11 @@ def build_cart_cookie_value(product_id, quantity=1):
     return f"NO^{product_id}^{quantity}^0"
 
 
-def build_auto_add_link(product):
-    parts = urlsplit(product["link"])
-    auto_add_params = {
-        "hw_auto_add": "1",
-        "hw_checkout": "1",
-        "hw_pid": str(product["id"]),
-    }
-    query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query.update(auto_add_params)
-    fragment = dict(parse_qsl(parts.fragment, keep_blank_values=True))
-    fragment.update(auto_add_params)
-    return urlunsplit(
-        (
-            parts.scheme,
-            parts.netloc,
-            parts.path,
-            urlencode(query),
-            urlencode(fragment),
-        )
-    )
-
-
 def add_cart_action_metadata(product):
     product = dict(product)
     product["cart_cookie_name"] = FIRSTCRY_CART_COOKIE_NAME
     product["cart_cookie"] = build_cart_cookie_value(product["id"])
     product["cart_url"] = FIRSTCRY_CART_URL
-    product["add_to_cart_link"] = build_auto_add_link(product)
     return product
 
 
