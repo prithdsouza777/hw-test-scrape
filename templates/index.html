@@ -45,6 +45,16 @@
             color: #bb86fc;
         }
 
+        .error-banner {
+            display: none;
+            padding: 12px 15px;
+            margin-bottom: 20px;
+            background: #351c23;
+            border: 1px solid #cf6679;
+            border-radius: 8px;
+            color: #ffb4bf;
+        }
+
         .alerts-section {
             margin-bottom: 20px;
         }
@@ -106,6 +116,21 @@
             object-fit: cover;
             border-radius: 4px;
             margin-bottom: 15px;
+        }
+
+        .image-placeholder {
+            height: 200px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 15px;
+            border-radius: 4px;
+            background: #333;
+        }
+
+        .image-placeholder.monitor {
+            height: 150px;
+            margin-bottom: 10px;
         }
 
         .product-name {
@@ -282,6 +307,8 @@
             </div>
         </div>
 
+        <div class="error-banner" id="scrape-error"></div>
+
         <div class="monitor-section" id="monitor-section" style="display: none;">
             <div class="monitor-header">
                 <div class="monitor-title">Live Monitor (New & Back in Stock)</div>
@@ -351,87 +378,156 @@
             });
         }
 
+        function createElement(tag, className, text) {
+            const element = document.createElement(tag);
+            if (className) {
+                element.className = className;
+            }
+            if (text !== undefined) {
+                element.textContent = text;
+            }
+            return element;
+        }
+
+        function createImage(product, monitor = false) {
+            if (!product.image) {
+                return createElement('div', `image-placeholder${monitor ? ' monitor' : ''}`, 'No Image');
+            }
+
+            const image = document.createElement('img');
+            image.src = product.image;
+            image.alt = product.name;
+            image.loading = 'lazy';
+            return image;
+        }
+
+        function createProductLink(product, text) {
+            const link = createElement('a', 'product-link', text);
+            link.href = product.link;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            return link;
+        }
+
+        function renderAlerts(alerts) {
+            const container = document.getElementById('alerts-container');
+            const elements = [];
+            let hasNewAlert = false;
+
+            alerts.forEach(alert => {
+                const cardClass = alert.type === 'NEW' ? 'new' : 'stock';
+                const card = createElement('div', `alert-card ${cardClass}`);
+                card.appendChild(createElement('span', 'alert-time', alert.time));
+                card.appendChild(createElement(
+                    'strong',
+                    '',
+                    alert.type === 'NEW' ? 'NEW' : 'BACK IN STOCK'
+                ));
+                card.appendChild(document.createElement('br'));
+                card.appendChild(document.createTextNode(`${alert.message} `));
+
+                const link = createElement('a', 'alert-link', 'View');
+                link.href = alert.link;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                card.appendChild(link);
+                elements.push(card);
+
+                const alertId = alert.id || `${alert.time}-${alert.message}`;
+                if (!seenAlerts.has(alertId)) {
+                    seenAlerts.add(alertId);
+                    if (!firstLoad) {
+                        hasNewAlert = true;
+                    }
+                }
+            });
+
+            container.replaceChildren(...elements);
+            if (hasNewAlert) {
+                playBell();
+            }
+        }
+
+        function renderMonitoredProducts(products) {
+            const section = document.getElementById('monitor-section');
+            const container = document.getElementById('monitor-container');
+
+            if (!products.length) {
+                section.style.display = 'none';
+                container.replaceChildren();
+                return;
+            }
+
+            section.style.display = 'block';
+            const cards = products.map(product => {
+                const badgeClass = product.alert_type === 'NEW' ? 'new' : 'stock';
+                const badgeText = product.alert_type === 'NEW' ? 'NEW' : 'BACK';
+                const card = createElement('div', 'monitor-card');
+                card.appendChild(createElement('span', `monitor-badge ${badgeClass}`, badgeText));
+                card.appendChild(createImage(product, true));
+
+                const name = createElement('div', 'product-name', product.name);
+                name.title = product.name;
+                name.style.fontSize = '0.85em';
+                name.style.marginBottom = '10px';
+                card.appendChild(name);
+
+                const alertTime = createElement('div', '', product.alert_time);
+                alertTime.style.fontSize = '0.75em';
+                alertTime.style.color = '#757575';
+                alertTime.style.marginBottom = '8px';
+                card.appendChild(alertTime);
+                card.appendChild(createProductLink(product, 'BUY NOW'));
+                return card;
+            });
+            container.replaceChildren(...cards);
+        }
+
+        function renderProducts(products) {
+            const container = document.getElementById('products-container');
+            const cards = Object.values(products).map(product => {
+                const card = createElement('div', 'product-card');
+                card.appendChild(createImage(product));
+
+                const name = createElement('div', 'product-name', product.name);
+                name.title = product.name;
+                card.appendChild(name);
+                card.appendChild(createProductLink(product, 'OPEN PRODUCT'));
+                return card;
+            });
+            container.replaceChildren(...cards);
+        }
+
         function updateData() {
             fetch('/api/data')
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Dashboard request failed with HTTP ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     document.getElementById('total-count').textContent = data.total_count;
                     document.getElementById('last-updated').textContent = data.last_updated;
                     document.getElementById('loading').style.display = data.is_scraping ? 'inline-block' : 'none';
 
-                    // Update Alerts
-                    const alertsContainer = document.getElementById('alerts-container');
-                    alertsContainer.innerHTML = '';
+                    const scrapeError = document.getElementById('scrape-error');
+                    scrapeError.textContent = data.last_error
+                        ? `Last scrape failed: ${data.last_error}`
+                        : '';
+                    scrapeError.style.display = data.last_error ? 'block' : 'none';
 
-                    let hasNewAlert = false;
-                    data.alerts.forEach(alert => {
-                        const div = document.createElement('div');
-                        div.className = `alert-card ${alert.type === 'NEW' ? 'new' : 'stock'}`;
-                        div.innerHTML = `
-                            <span class="alert-time">${alert.time}</span>
-                            <strong>${alert.type === 'NEW' ? 'NEW' : 'BACK IN STOCK'}</strong><br>
-                            ${alert.message} <a href="${alert.link}" target="_blank" class="alert-link">View</a>
-                        `;
-                        alertsContainer.appendChild(div);
-
-                        const alertId = alert.time + alert.message;
-                        if (!seenAlerts.has(alertId)) {
-                            seenAlerts.add(alertId);
-                            if (!firstLoad) {
-                                hasNewAlert = true;
-                            }
-                        }
-                    });
-
-                    if (hasNewAlert) {
-                        playBell();
-                    }
-
+                    renderAlerts(data.alerts || []);
+                    renderMonitoredProducts(data.monitored_products || []);
+                    renderProducts(data.products || {});
                     firstLoad = false;
-
-                    // Update Monitor Section
-                    const monitorSection = document.getElementById('monitor-section');
-                    const monitorContainer = document.getElementById('monitor-container');
-
-                    if (data.monitored_products && data.monitored_products.length > 0) {
-                        monitorSection.style.display = 'block';
-                        let monitorHtml = '';
-                        data.monitored_products.forEach(p => {
-                            const badgeClass = p.alert_type === 'NEW' ? 'new' : 'stock';
-                            const badgeText = p.alert_type === 'NEW' ? 'NEW' : 'BACK';
-                            const imageHtml = p.image ? `<img src="${p.image}" alt="${p.name}">` : '<div style="height:150px;background:#333;display:flex;align-items:center;justify-content:center;margin-bottom:10px;border-radius:4px;">No Image</div>';
-
-                            monitorHtml += `
-                                <div class="monitor-card">
-                                    <span class="monitor-badge ${badgeClass}">${badgeText}</span>
-                                    ${imageHtml}
-                                    <div class="product-name" style="font-size:0.85em; margin-bottom:10px;" title="${p.name}">${p.name}</div>
-                                    <div style="font-size:0.75em; color:#757575; margin-bottom:8px;">${p.alert_time}</div>
-                                    <a href="${p.link}" target="_blank" class="product-link">BUY NOW</a>
-                                </div>
-                            `;
-                        });
-                        monitorContainer.innerHTML = monitorHtml;
-                    } else {
-                        monitorSection.style.display = 'none';
-                    }
-
-                    // Update Products
-                    const productsContainer = document.getElementById('products-container');
-
-                    let productsHtml = '';
-                    Object.values(data.products).forEach(p => {
-                        const imageHtml = p.image ? `<img src="${p.image}" alt="${p.name}">` : '<div style="height:200px;background:#333;display:flex;align-items:center;justify-content:center;margin-bottom:15px;border-radius:4px;">No Image</div>';
-                        productsHtml += `
-                            <div class="product-card">
-                                ${imageHtml}
-                                <div class="product-name" title="${p.name}">${p.name}</div>
-                            </div>
-                        `;
-                    });
-                    productsContainer.innerHTML = productsHtml;
                 })
-                .catch(err => console.error('Error fetching data:', err));
+                .catch(error => {
+                    const scrapeError = document.getElementById('scrape-error');
+                    scrapeError.textContent = error.message;
+                    scrapeError.style.display = 'block';
+                    console.error('Error fetching data:', error);
+                });
         }
 
         setInterval(updateData, 5000);
