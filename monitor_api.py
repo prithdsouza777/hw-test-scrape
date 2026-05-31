@@ -559,7 +559,7 @@ def monitor():
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    LOGGER.info("Starting experimental FirstCry listing API monitor")
+    LOGGER.info("Starting FirstCry listing API monitor")
     tracker = ProductTracker(
         missing_confirmation_snapshots=MISSING_CONFIRMATION_SNAPSHOTS
     )
@@ -583,7 +583,7 @@ def monitor():
             duration = time.monotonic() - started_at
             time.sleep(max(1.0, POLL_INTERVAL_SECONDS - duration))
     except KeyboardInterrupt:
-        print(f"\n{Fore.CYAN}Stopping experimental API monitor.{Style.RESET_ALL}")
+        print(f"\n{Fore.CYAN}Stopping API monitor.{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":
