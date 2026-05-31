@@ -303,7 +303,7 @@
             <div class="stat-item">In Stock: <span id="total-count" class="stat-value">0</span></div>
             <div class="stat-item">
                 Updated: <span id="last-updated" class="stat-value">Waiting...</span>
-                <button id="sound-toggle" class="sound-toggle active" onclick="toggleSound()">Sound: ON</button>
+                <button id="sound-toggle" class="sound-toggle" onclick="toggleSound()">Sound: OFF</button>
             </div>
         </div>
 
@@ -328,30 +328,20 @@
     </div>
 
     <script>
-        let soundEnabled = true;
+        let soundEnabled = false;
         let seenAlerts = new Set();
         let firstLoad = true;
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-        function syncSoundButton() {
+        function toggleSound() {
+            soundEnabled = !soundEnabled;
             const btn = document.getElementById('sound-toggle');
             btn.textContent = soundEnabled ? 'Sound: ON' : 'Sound: OFF';
             btn.classList.toggle('active', soundEnabled);
-        }
 
-        function unlockAudio() {
             if (soundEnabled && audioCtx.state === 'suspended') {
-                audioCtx.resume().catch(error => {
-                    console.warn('Audio unlock failed:', error);
-                });
+                audioCtx.resume();
             }
-        }
-
-        function toggleSound() {
-            soundEnabled = !soundEnabled;
-            syncSoundButton();
-
-            unlockAudio();
 
             if (soundEnabled) {
                 playBell();
@@ -360,7 +350,6 @@
 
         function playBell() {
             if (!soundEnabled) return;
-            unlockAudio();
 
             const now = audioCtx.currentTime;
 
@@ -542,10 +531,7 @@
         }
 
         setInterval(updateData, 5000);
-        window.addEventListener('pointerdown', unlockAudio, { once: true });
-        window.addEventListener('keydown', unlockAudio, { once: true });
-        syncSoundButton();
-        updateData();
+        updateData(); 
     </script>
 </body>
 
