@@ -8,11 +8,14 @@ from monitor_api import (
     _build_gap_product_candidates,
     LISTING_SORT_EXPRESSIONS,
     fetch_api_products,
+    fetch_known_products,
+    load_watchlist_ids,
     parse_cart_product_count,
     parse_api_product,
     parse_detail_api_stock_count,
     parse_detail_stock_count,
     parse_gap_product,
+    parse_known_product,
     verify_in_stock_products,
 )
 
@@ -171,6 +174,25 @@ class ApiProductParsingTests(unittest.TestCase):
 
         self.assertIsNone(parse_gap_product(payload, "123"))
 
+    def test_parse_known_product_keeps_out_of_stock_metadata_for_cart_probe(self):
+        payload = {
+            "PInfo": {
+                "pid": 123,
+                "pnm": "Hot Wheels Hidden Car - Blue",
+                "BID": 113,
+                "CurSt": 0,
+                "Img": "123a.jpg;",
+            },
+            "PColor": [{"pid": 123, "CS": 0}],
+        }
+
+        product = parse_known_product(payload, "123")
+
+        self.assertEqual("123", product["id"])
+        self.assertFalse(product["in_stock"])
+        self.assertEqual(0, product["stock_count"])
+        self.assertEqual("known_product_api", product["stock_signal"])
+
     def test_parse_detail_stock_count_does_not_trust_stale_curst(self):
         html = (
             '<script>var CurrentProductDetailJSON={"123":{"CS":0,"pn":"Car"}},'
@@ -318,6 +340,77 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual(3, result.unique_products)
         self.assertEqual(2, products["11"]["stock_count"])
         self.assertTrue(products["11"]["in_stock"])
+
+    def test_fetch_known_products_cart_probes_current_out_of_stock_products(self):
+        products = {
+            "11": {
+                "id": "11",
+                "name": "Hot Wheels Hidden Product",
+                "in_stock": False,
+                "stock_count": 0,
+                "link": "https://www.firstcry.com/hot-wheels/hidden/11/product-detail",
+                "image": "",
+            },
+            "12": {
+                "id": "12",
+                "name": "Hot Wheels Already In Stock",
+                "in_stock": True,
+                "stock_count": 2,
+                "link": "https://www.firstcry.com/hot-wheels/visible/12/product-detail",
+                "image": "",
+            },
+        }
+
+        probed_products = fetch_known_products(
+            products,
+            known_products={},
+            watchlist_ids=set(),
+            product_fetcher=lambda product_id: self.fail("metadata should already exist"),
+            cart_fetcher=lambda product: 1 if product["id"] == "11" else 0,
+        )
+
+        self.assertEqual(["11"], list(probed_products))
+        self.assertTrue(probed_products["11"]["in_stock"])
+        self.assertEqual(1, probed_products["11"]["cart_product_count"])
+        self.assertEqual("known_product_cart_count", probed_products["11"]["stock_signal"])
+
+    def test_fetch_known_products_uses_watchlist_ids(self):
+        def product_fetcher(product_id):
+            return {
+                "id": product_id,
+                "name": "Hot Wheels Old Order Product",
+                "in_stock": False,
+                "stock_count": 0,
+                "detail_stock_count": 0,
+                "link": f"https://www.firstcry.com/hot-wheels/old/{product_id}/product-detail",
+                "image": "",
+                "stock_signal": "known_product_api",
+            }
+
+        probed_products = fetch_known_products(
+            {},
+            known_products={},
+            watchlist_ids={"99"},
+            product_fetcher=product_fetcher,
+            cart_fetcher=lambda product: 1,
+        )
+
+        self.assertEqual(["99"], list(probed_products))
+        self.assertEqual("Hot Wheels Old Order Product", probed_products["99"]["name"])
+        self.assertEqual("known_product_cart_count", probed_products["99"]["stock_signal"])
+
+    def test_load_watchlist_ids_reads_product_urls_and_plain_ids(self):
+        class FakePath:
+            def exists(self):
+                return True
+
+            def read_text(self, encoding):
+                return (
+                    "https://www.firstcry.com/hot-wheels/car/12345/product-detail\n"
+                    "67890\n"
+                )
+
+        self.assertEqual({"12345", "67890"}, load_watchlist_ids(FakePath()))
 
     def test_fetch_api_products_rejects_incomplete_snapshot(self):
         def page_fetcher(page_number):
