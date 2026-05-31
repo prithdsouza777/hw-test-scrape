@@ -344,7 +344,7 @@
 
 <body>
     <div class="container">
-        <h1>Buyability Monitor <span id="loading" class="loading-indicator"></span></h1>
+        <h1>Hot Wheels Monitor <span id="loading" class="loading-indicator"></span></h1>
 
         <div class="stats-bar">
             <div class="stat-item">
@@ -491,7 +491,7 @@
             const originalText = button.textContent;
             button.disabled = true;
             button.textContent = 'ADDING...';
-            showActionStatus(`Adding ${product.name} to the Selenium FirstCry cart window...`);
+            showActionStatus(`Opening a new Selenium FirstCry cart tab for ${product.name}...`);
 
             fetch(`/api/add-to-cart/${encodeURIComponent(product.id)}`, { method: 'POST' })
                 .then(response => response.json().then(payload => ({ response, payload })))
@@ -500,7 +500,7 @@
                         throw new Error(payload.error || `Add to cart failed with HTTP ${response.status}`);
                     }
                     showActionStatus(
-                        `Added ${product.name} to the FirstCry cart window. Checkout there.`
+                        `Opened a new FirstCry cart tab with ${product.name}. Checkout there.`
                     );
                 })
                 .catch(error => {
@@ -516,7 +516,7 @@
         function createAddToCartButton(product) {
             const button = createElement('button', 'product-link add-to-cart', 'ADD TO CART');
             button.type = 'button';
-            button.title = 'Cart API accepted this product. Opens a Selenium FirstCry cart window and adds it there.';
+            button.title = 'Cart API accepted this product. Opens a new Selenium FirstCry cart tab with it added.';
             button.addEventListener('click', () => handleAddToCart(product, button));
             return button;
         }
