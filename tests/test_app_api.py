@@ -23,6 +23,17 @@ class ApiDashboardTests(unittest.TestCase):
                     "stock_count": 3,
                     "link": "https://www.firstcry.com/hot-wheels/test-car/1/product-detail",
                     "image": "",
+                },
+                "2": {
+                    "id": "2",
+                    "name": "Hot Wheels Pending Car",
+                    "in_stock": False,
+                    "pending_cart": True,
+                    "stock_count": 0,
+                    "detail_stock_count": 1,
+                    "cart_product_count": 0,
+                    "link": "https://www.firstcry.com/hot-wheels/test-car/2/product-detail",
+                    "image": "",
                 }
             }
         )
@@ -50,6 +61,8 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertEqual(276, payload["catalog_count"])
         self.assertEqual(120, payload["listing_ttl_seconds"])
         self.assertEqual(3, payload["products"]["1"]["stock_count"])
+        self.assertEqual(1, payload["pending_count"])
+        self.assertEqual(0, payload["pending_products"]["2"]["cart_product_count"])
 
 
 if __name__ == "__main__":

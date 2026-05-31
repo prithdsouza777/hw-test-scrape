@@ -6,6 +6,7 @@ from monitor_api import (
     ApiScrapeError,
     _decode_page,
     fetch_api_products,
+    parse_cart_product_count,
     parse_api_product,
     parse_detail_stock_count,
     verify_in_stock_products,
@@ -113,6 +114,16 @@ class ApiProductParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiScrapeError, "missing CurrentProductDetailJSON"):
             parse_detail_stock_count("<html></html>", "123")
 
+    def test_parse_cart_product_count_reads_count_result(self):
+        self.assertEqual(
+            1,
+            parse_cart_product_count('{"GetCartProductCountResult":1}'),
+        )
+
+    def test_parse_cart_product_count_rejects_unexpected_response(self):
+        with self.assertRaisesRegex(ApiScrapeError, "unexpected stock data"):
+            parse_cart_product_count("{}")
+
 
 class ApiPaginationTests(unittest.TestCase):
     def test_fetch_api_products_reads_all_pages_and_deduplicates_variants(self):
@@ -206,6 +217,7 @@ class ApiPaginationTests(unittest.TestCase):
             return verify_in_stock_products(
                 products,
                 detail_fetcher=lambda product: 0 if product["id"] == "1" else 2,
+                cart_fetcher=None,
             )
 
         products, _ = fetch_api_products(
@@ -224,6 +236,37 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual(2, products["2"]["stock_count"])
         self.assertEqual(2, products["2"]["detail_stock_count"])
         self.assertFalse(products["3"]["in_stock"])
+
+    def test_fetch_api_products_can_confirm_stock_with_cart_api(self):
+        def page_fetcher(page_number):
+            return make_page(
+                [
+                    make_raw_product("1", stock="5"),
+                    make_raw_product("2", stock="4"),
+                ],
+                expected_products=2,
+            )
+
+        def detail_verifier(products):
+            return verify_in_stock_products(
+                products,
+                detail_fetcher=lambda product: 1,
+                cart_fetcher=lambda product: 0 if product["id"] == "1" else 1,
+            )
+
+        products, _ = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=detail_verifier,
+        )
+
+        self.assertFalse(products["1"]["in_stock"])
+        self.assertEqual(0, products["1"]["stock_count"])
+        self.assertEqual(0, products["1"]["cart_product_count"])
+        self.assertTrue(products["1"]["pending_cart"])
+        self.assertEqual("cart_pending", products["1"]["stock_signal"])
+        self.assertTrue(products["2"]["in_stock"])
+        self.assertEqual(1, products["2"]["cart_product_count"])
+        self.assertEqual("cart_product_count", products["2"]["stock_signal"])
 
 
 if __name__ == "__main__":
