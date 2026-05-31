@@ -26,6 +26,11 @@ a failed scrape must not be treated as a real out-of-stock event.
 - Keep direct product gap discovery enabled unless a live audit proves it is no
   longer needed. FirstCry can expose cartable Hot Wheels product pages between
   listed product IDs without returning them as standalone listing rows.
+- Keep known-product cart probing enabled unless a live audit proves it is no
+  longer needed. FirstCry can accept add-to-cart from carousel/reorder paths
+  for products that are hidden or out of stock on their main product page.
+- Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
+  do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose
   selector drift while continuing past malformed individual product cards.
 - Do not replace a known-good product snapshot with an empty scrape.

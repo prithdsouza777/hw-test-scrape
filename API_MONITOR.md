@@ -24,6 +24,14 @@ live inside those gaps even when they are missing as standalone listing rows.
 Gap products still must pass the product API and cart-count checks before they
 show as in stock.
 
+The monitor also keeps a local `known_products.json` cache of product IDs it
+has seen before and cart-probes those IDs on later runs. This catches products
+that FirstCry hides from the listing and product page add-to-cart button while
+still accepting them through carousel/reorder add-to-cart paths. To seed old
+order or recently viewed products, create `watchlist.txt` beside `run.bat` and
+paste one product ID or FirstCry product URL per line. Both local files are
+ignored by git.
+
 The dashboard separates the signals:
 
 - `In Stock`: accepted by the cart product-count API.
@@ -75,5 +83,15 @@ can still become buyable after FirstCry finishes propagating stock internally.
 - `FIRSTCRY_API_GAP_PRODUCT_MAX_CANDIDATES`: maximum gap product IDs to probe
   per scrape, default `300`
 - `FIRSTCRY_API_GAP_PRODUCT_WORKERS`: concurrent gap product API checks,
+  default `12`
+- `FIRSTCRY_API_PROBE_KNOWN_PRODUCTS`: set to `0` to disable cart probing for
+  previously seen and watchlisted product IDs, default enabled
+- `FIRSTCRY_API_KNOWN_PRODUCTS_FILE`: local product cache path, default
+  `known_products.json`
+- `FIRSTCRY_API_WATCHLIST_FILE`: optional product ID/URL watchlist path,
+  default `watchlist.txt`
+- `FIRSTCRY_API_KNOWN_PRODUCT_MAX_IDS`: maximum known/watchlist/current
+  out-of-stock IDs to cart-probe per scrape, default `1000`
+- `FIRSTCRY_API_KNOWN_PRODUCT_WORKERS`: concurrent known product cart checks,
   default `12`
 - `FLASK_PORT`: dashboard port, default `5000`
