@@ -7,6 +7,8 @@ from monitor_api import (
     _decode_page,
     fetch_api_products,
     parse_api_product,
+    parse_detail_stock_count,
+    verify_in_stock_products,
 )
 
 
@@ -89,6 +91,19 @@ class ApiProductParsingTests(unittest.TestCase):
 
         self.assertIsNone(page["expected_products"])
 
+    def test_parse_detail_stock_count_reads_product_detail_curst(self):
+        html = (
+            '<script>var CurrentProductDetailJSON={},'
+            'ProductDetailJSON={"PInfo":{"pid":123,"CurSt":2,"pnm":"Car"},'
+            '"PColor":[]};</script>'
+        )
+
+        self.assertEqual(2, parse_detail_stock_count(html))
+
+    def test_parse_detail_stock_count_rejects_missing_detail_json(self):
+        with self.assertRaisesRegex(ApiScrapeError, "missing ProductDetailJSON"):
+            parse_detail_stock_count("<html></html>")
+
 
 class ApiPaginationTests(unittest.TestCase):
     def test_fetch_api_products_reads_all_pages_and_deduplicates_variants(self):
@@ -108,7 +123,10 @@ class ApiPaginationTests(unittest.TestCase):
                 ttl_seconds=110,
             )
 
-        products, result = fetch_api_products(page_fetcher=page_fetcher)
+        products, result = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=None,
+        )
 
         self.assertEqual([1, 2], calls)
         self.assertEqual(22, result.raw_products)
@@ -122,14 +140,14 @@ class ApiPaginationTests(unittest.TestCase):
             return make_page([make_raw_product("1")], expected_products=21)
 
         with self.assertRaisesRegex(ApiScrapeError, "incomplete snapshot"):
-            fetch_api_products(page_fetcher=page_fetcher)
+            fetch_api_products(page_fetcher=page_fetcher, detail_verifier=None)
 
     def test_fetch_api_products_rejects_missing_first_page_count(self):
         def page_fetcher(page_number):
             return make_page([make_raw_product("1")], expected_products=None)
 
         with self.assertRaisesRegex(ApiScrapeError, "missing its product count"):
-            fetch_api_products(page_fetcher=page_fetcher)
+            fetch_api_products(page_fetcher=page_fetcher, detail_verifier=None)
 
     def test_fetch_api_products_rejects_count_change_mid_scrape(self):
         def page_fetcher(page_number):
@@ -137,7 +155,7 @@ class ApiPaginationTests(unittest.TestCase):
             return make_page([make_raw_product(str(page_number))], expected_products=count)
 
         with self.assertRaisesRegex(ApiScrapeError, "changed mid-scrape"):
-            fetch_api_products(page_fetcher=page_fetcher)
+            fetch_api_products(page_fetcher=page_fetcher, detail_verifier=None)
 
     @patch("monitor_api.MAX_PAGES", 1)
     def test_fetch_api_products_honors_page_safety_limit(self):
@@ -145,7 +163,38 @@ class ApiPaginationTests(unittest.TestCase):
             return make_page([make_raw_product("1")], expected_products=21)
 
         with self.assertRaisesRegex(ApiScrapeError, "configured maximum"):
-            fetch_api_products(page_fetcher=page_fetcher)
+            fetch_api_products(page_fetcher=page_fetcher, detail_verifier=None)
+
+    def test_fetch_api_products_can_confirm_listing_stock_with_detail_page(self):
+        def page_fetcher(page_number):
+            return make_page(
+                [
+                    make_raw_product("1", stock="5"),
+                    make_raw_product("2", stock="4"),
+                    make_raw_product("3", stock="0"),
+                ],
+                expected_products=3,
+            )
+
+        def detail_verifier(products):
+            return verify_in_stock_products(
+                products,
+                detail_fetcher=lambda product: 0 if product["id"] == "1" else 2,
+            )
+
+        products, _ = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=detail_verifier,
+        )
+
+        self.assertFalse(products["1"]["in_stock"])
+        self.assertEqual(0, products["1"]["stock_count"])
+        self.assertEqual(0, products["1"]["detail_stock_count"])
+        self.assertEqual("detail_page_curst", products["1"]["stock_signal"])
+        self.assertTrue(products["2"]["in_stock"])
+        self.assertEqual(2, products["2"]["stock_count"])
+        self.assertEqual(2, products["2"]["detail_stock_count"])
+        self.assertFalse(products["3"]["in_stock"])
 
 
 if __name__ == "__main__":
