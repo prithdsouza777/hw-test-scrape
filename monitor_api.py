@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from inspect import Parameter, signature
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from colorama import Fore, Style, init
@@ -35,7 +35,7 @@ CART_PRODUCT_COUNT_URL = (
     "https://csc.fcappservices.in/ShoppingCart/ShoppingCart.svc/json/"
     "GetCartProductCount"
 )
-FIRSTCRY_CART_URL = "https://www.firstcry.com/cart"
+FIRSTCRY_CART_URL = "https://checkout.firstcry.com/pay"
 FIRSTCRY_CART_COOKIE_NAME = "_$FC$_cookies_for_cart_v2_"
 IMAGE_BASE_URL = "https://cdn.fcglcdn.com/brainbees/images/products/219x265/"
 PAGE_SIZE = 20
@@ -241,23 +241,6 @@ def _build_image_url(images):
 
 def build_cart_cookie_value(product_id, quantity=1):
     return f"NO^{product_id}^{quantity}^0"
-
-
-def merge_cart_cookie_value(existing_value, product_id, quantity=1):
-    product_id = str(product_id)
-    existing_value = unquote(str(existing_value or ""))
-    entries = [entry for entry in existing_value.split("*") if entry]
-
-    for index, entry in enumerate(entries):
-        parts = entry.split("^")
-        if len(parts) >= 4 and parts[1] == product_id:
-            parts[2] = str(max(_parse_int(parts[2]), quantity))
-            entries[index] = "^".join(parts)
-            break
-    else:
-        entries.append(build_cart_cookie_value(product_id, quantity))
-
-    return "*".join(entries)
 
 
 def add_cart_action_metadata(product):
