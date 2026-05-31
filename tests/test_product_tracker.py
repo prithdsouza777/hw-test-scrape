@@ -18,6 +18,10 @@ def make_product(product_id, in_stock=True):
 
 
 class ProductTrackerTests(unittest.TestCase):
+    def test_missing_confirmation_count_must_be_positive(self):
+        with self.assertRaisesRegex(ValueError, "at least 1"):
+            ProductTracker(missing_confirmation_snapshots=0)
+
     def test_initial_snapshot_does_not_alert(self):
         tracker = ProductTracker()
 
@@ -42,6 +46,7 @@ class ProductTrackerTests(unittest.TestCase):
         tracker = ProductTracker()
         tracker.update({"1": make_product("1"), "2": make_product("2", False)}, now=NOW)
         tracker.update({"2": make_product("2", False)}, now=NOW)
+        tracker.update({"2": make_product("2", False)}, now=NOW)
 
         events = tracker.update(
             {"1": make_product("1"), "2": make_product("2", False)},
@@ -50,6 +55,18 @@ class ProductTrackerTests(unittest.TestCase):
 
         self.assertEqual(["STOCK"], [event["type"] for event in events])
         self.assertEqual("1", tracker.monitored_products[0]["id"])
+
+    def test_transient_missing_product_does_not_alert_when_it_returns(self):
+        tracker = ProductTracker()
+        tracker.update({"1": make_product("1"), "2": make_product("2", False)}, now=NOW)
+        tracker.update({"2": make_product("2", False)}, now=NOW)
+
+        events = tracker.update(
+            {"1": make_product("1"), "2": make_product("2", False)},
+            now=NOW,
+        )
+
+        self.assertEqual([], events)
 
     def test_empty_snapshot_is_rejected_without_losing_state(self):
         tracker = ProductTracker()
