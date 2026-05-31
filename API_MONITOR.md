@@ -1,8 +1,7 @@
-# Experimental FirstCry API Monitor
+# FirstCry API Monitor
 
-The existing Selenium monitor remains unchanged. This branch adds an optional
-browser-free dashboard that reads the same listing API FirstCry calls while the
-Hot Wheels page lazy-loads:
+This monitor reads the same listing API FirstCry calls while the Hot Wheels
+page lazy-loads:
 
 ```text
 https://www.firstcry.com/svcs/SearchResult.svc/GetSearchResultProductsPaging
@@ -19,44 +18,43 @@ or modify your browser cart.
 The dashboard separates the signals:
 
 - `In Stock`: accepted by the cart product-count API.
-- `Cart Pending`: listing/detail stock is positive, but cart validation still
+- `Cart Pending`: listing/product API stock is positive, but cart validation still
   rejects the item. These products may become cartable after FirstCry's stock
   data finishes propagating.
 
 ## Run
 
-Double-click `run_api.bat`, then open:
+Double-click `run.bat`, then open:
 
 ```text
-http://127.0.0.1:5001
+http://127.0.0.1:5000
 ```
 
-`run_api.bat` uses port `5001`, so it can run beside the existing Selenium
-dashboard on port `5000` while you compare signals.
+Override the port with `FLASK_PORT` if another local app is already using
+`5000`.
 
 ## Important Caveat
 
-FirstCry's listing API response includes a server-side `TTL` value. The
-alternative monitor logs that value because the listing may serve cached stock
-data. Detail-page and cart confirmation should remove many stale positives, but
-this is still an experimental second signal and should be compared against the
-existing Selenium monitor before replacing the current workflow.
+FirstCry's listing API response includes a server-side `TTL` value. The monitor
+logs that value because the listing may serve cached stock data. Product API
+and cart confirmation remove many stale positives, but a `Cart Pending` product
+can still become buyable after FirstCry finishes propagating stock internally.
 
 ## Optional Environment Variables
 
 - `FIRSTCRY_API_POLL_INTERVAL`: seconds between API scrape cycles, default `60`
 - `FIRSTCRY_API_TIMEOUT`: HTTP timeout in seconds, default `20`
-- `FIRSTCRY_API_VERIFY_DETAIL_STOCK`: set to `0` to disable product-detail
+- `FIRSTCRY_API_VERIFY_DETAIL_STOCK`: set to `0` to disable product API
   stock confirmation, default enabled
 - `FIRSTCRY_API_VERIFY_CART_STOCK`: set to `0` to disable isolated cart API
   stock confirmation, default enabled
-- `FIRSTCRY_API_DETAIL_TIMEOUT`: product-detail HTTP timeout in seconds,
+- `FIRSTCRY_API_DETAIL_TIMEOUT`: product API HTTP timeout in seconds,
   default `10`
 - `FIRSTCRY_API_CART_TIMEOUT`: cart API HTTP timeout in seconds, default `10`
-- `FIRSTCRY_API_DETAIL_WORKERS`: concurrent detail-page checks, default `8`
+- `FIRSTCRY_API_DETAIL_WORKERS`: concurrent product API checks, default `8`
 - `FIRSTCRY_API_MAX_PAGES`: maximum pagination safety limit, default `30`
 - `FIRSTCRY_API_MIN_PARSE_RATIO`: minimum listing API completeness ratio before
   rejecting a snapshot, default `0.95`
 - `FIRSTCRY_API_MISSING_CONFIRMATIONS`: missing snapshots required before a
   returning product alerts as restocked, default `2`
-- `FLASK_PORT`: experimental dashboard port, default `5000`
+- `FLASK_PORT`: dashboard port, default `5000`
