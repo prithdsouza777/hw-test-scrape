@@ -20,6 +20,9 @@ a failed scrape must not be treated as a real out-of-stock event.
   require live FirstCry requests.
 - Validate scraper changes with the live FirstCry listing when network access
   is available.
+- Keep listing discovery multi-sort aware. Newly stocked products may appear in
+  `newarrivals` before `popularity`, so do not collapse discovery to a single
+  sort without a live check.
 - Do not swallow parser failures silently. Log enough context to diagnose
   selector drift while continuing past malformed individual product cards.
 - Do not replace a known-good product snapshot with an empty scrape.

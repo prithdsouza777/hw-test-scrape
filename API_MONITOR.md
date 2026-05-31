@@ -7,6 +7,8 @@ page lazy-loads:
 https://www.firstcry.com/svcs/SearchResult.svc/GetSearchResultProductsPaging
 ```
 
+The monitor merges the `popularity` and `newarrivals` sort feeds by default
+because FirstCry can publish newly stocked cards to one sort before another.
 The response exposes each product's `CrntStock` quantity. For products where
 the listing API claims stock is available, the monitor also calls
 `CommonService.svc/getProduct/pid={pid}/uid=0` and confirms the matching
@@ -57,4 +59,6 @@ can still become buyable after FirstCry finishes propagating stock internally.
   rejecting a snapshot, default `0.95`
 - `FIRSTCRY_API_MISSING_CONFIRMATIONS`: missing snapshots required before a
   returning product alerts as restocked, default `2`
+- `FIRSTCRY_API_SORT_EXPRESSIONS`: comma-separated listing sorts to merge,
+  default `popularity,newarrivals`
 - `FLASK_PORT`: dashboard port, default `5000`
