@@ -42,20 +42,20 @@ The dashboard is centered on buyability, not the product page button:
 
 For cart-accepted products, the dashboard shows both `VIEW PRODUCT` and
 `ADD TO CART`. `VIEW PRODUCT` is a normal `target="_blank"` product page link.
-`ADD TO CART` also opens in your existing browser session, but it includes the
-auto-add flags used by the helper extension.
+`ADD TO CART` is handled by the local Chrome extension on the dashboard page.
 FirstCry's checkout/cart page for an already-added product is
 `https://checkout.firstcry.com/pay`.
 
-To make that new FirstCry tab auto-add the product and continue to checkout,
-load the local unpacked Chrome extension in `firstcry_auto_cart_extension`.
-The dashboard appends `hw_auto_add=1&hw_checkout=1&hw_pid={product_id}` to the
-query string and URL hash of add-to-cart links. The extension sees that flag on
-`firstcry.com`, injects a FirstCry page runner, clicks FirstCry's real
-`.add_to_cart` button, waits for the cart cookie or `GO TO CART` button, then
-clicks `GO TO CART` or redirects to FirstCry's checkout URL. If the page does
-not confirm the item was added, it stays on the product page instead of
-pretending the add succeeded.
+Load the local unpacked Chrome extension in `firstcry_auto_cart_extension`.
+Open your FirstCry orderdetails page once so the extension can remember the
+URL. When `ADD TO CART` is clicked, the extension opens that orderdetails page
+with the dashboard product ID in the hash, creates a hidden recent-order style
+button, calls FirstCry's `sliderproductAddcart(productId, 1, button)` function,
+and then goes to checkout. This deliberately bypasses the visible product-page
+button because FirstCry can accept a product through reorder/recently-viewed
+paths before the PDP UI shows an add button. If FirstCry's cart system stops
+accepting the product between the monitor check and your click, checkout may
+still remove it; that is the real buyability race.
 
 ## Run
 

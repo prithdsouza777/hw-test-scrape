@@ -32,16 +32,14 @@ a failed scrape must not be treated as a real out-of-stock event.
 - Treat cart acceptance as the primary buyability signal. Product page buttons,
   listing stock, and product API stock are secondary because they can lag behind
   or get ahead of the cart system.
-- Keep dashboard product actions as normal browser links. The `ADD TO CART`
-  dashboard action should open the FirstCry product page in a new tab using the
-  user's existing browser session, not launch Selenium or a separate browser.
-  Auto-add and checkout redirect behavior is handled by the local
-  `firstcry_auto_cart_extension` Chrome extension running on `firstcry.com`.
+- Keep dashboard product actions lightweight. `VIEW PRODUCT` should remain a
+  plain product-page link. `ADD TO CART` is handled by the local
+  `firstcry_auto_cart_extension` Chrome extension running on the dashboard page.
 - Keep `VIEW PRODUCT` as a plain product-page link and `ADD TO CART` as the
-  auto-add handoff. The extension should mirror FirstCry's PDP flow: click the
-  real add button, wait for cart confirmation or `GO TO CART`, then continue to
-  checkout. Add-to-cart links should carry helper flags in both query and hash
-  form so the extension can still detect them if FirstCry strips query params.
+  recent-order handoff. Do not make `ADD TO CART` depend on the FirstCry PDP
+  button being visible; hidden/cartable products are the main use case. The
+  extension should prefer FirstCry's orderdetails `sliderproductAddcart`
+  function when available.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose
