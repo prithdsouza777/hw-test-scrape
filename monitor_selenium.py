@@ -51,6 +51,14 @@ def _env_float(name, default):
         return float(default)
 
 
+def _env_int(name, default):
+    try:
+        return max(1, int(os.getenv(name, default)))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid %s value; using %s", name, default)
+        return int(default)
+
+
 PAGE_LOAD_TIMEOUT_SECONDS = _env_float("FIRSTCRY_PAGE_LOAD_TIMEOUT", 30)
 CARD_WAIT_TIMEOUT_SECONDS = _env_float("FIRSTCRY_CARD_WAIT_TIMEOUT", 10)
 MAX_SCROLL_SECONDS = _env_float("FIRSTCRY_MAX_SCROLL_SECONDS", 60)
@@ -58,6 +66,7 @@ SCROLL_SETTLE_SECONDS = _env_float("FIRSTCRY_SCROLL_SETTLE_SECONDS", 6)
 SCROLL_POLL_SECONDS = _env_float("FIRSTCRY_SCROLL_POLL_SECONDS", 1)
 MIN_PARSE_RATIO = _env_float("FIRSTCRY_MIN_PARSE_RATIO", 0.9)
 POLL_INTERVAL_SECONDS = _env_float("FIRSTCRY_POLL_INTERVAL", 15)
+MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_MISSING_CONFIRMATIONS", 2)
 
 
 def setup_driver():
@@ -90,7 +99,7 @@ def close_driver(driver):
 
     try:
         driver.quit()
-    except WebDriverException:
+    except Exception:
         LOGGER.debug("WebDriver was already unavailable while closing", exc_info=True)
 
 
@@ -304,6 +313,7 @@ def monitor():
 
     driver = None
     seen_products = {}
+    missing_counts = {}
     first_run = True
 
     try:
@@ -318,11 +328,14 @@ def monitor():
 
                 missing_ids = seen_products.keys() - current_products.keys()
                 for product_id in missing_ids:
-                    seen_products[product_id]["in_stock"] = False
+                    missing_counts[product_id] = missing_counts.get(product_id, 0) + 1
+                    if missing_counts[product_id] >= MISSING_CONFIRMATION_SNAPSHOTS:
+                        seen_products[product_id]["in_stock"] = False
 
                 count_new = 0
                 count_back_in_stock = 0
                 for product_id, data in current_products.items():
+                    missing_counts.pop(product_id, None)
                     old_data = seen_products.get(product_id)
                     if old_data is None:
                         if not first_run and data["in_stock"]:
@@ -351,8 +364,8 @@ def monitor():
                         f"{Fore.WHITE}No changes. Tracking "
                         f"{len(seen_products)} products.{Style.RESET_ALL}"
                     )
-            except (ScrapeError, WebDriverException) as exc:
-                LOGGER.error("Scrape failed: %s", exc)
+            except Exception:
+                LOGGER.exception("Scrape failed; restarting WebDriver")
                 close_driver(driver)
                 driver = None
 

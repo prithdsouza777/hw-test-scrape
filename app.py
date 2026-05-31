@@ -9,6 +9,7 @@ from flask import Flask, jsonify, render_template
 from openpyxl import Workbook, load_workbook
 
 from monitor_selenium import (
+    MISSING_CONFIRMATION_SNAPSHOTS,
     POLL_INTERVAL_SECONDS,
     URL,
     close_driver,
@@ -22,7 +23,9 @@ LOG_PATH = Path(__file__).with_name("log.xlsx")
 
 app = Flask(__name__)
 
-tracker = ProductTracker()
+tracker = ProductTracker(
+    missing_confirmation_snapshots=MISSING_CONFIRMATION_SNAPSHOTS
+)
 state_lock = threading.Lock()
 last_updated = "Never"
 last_error = None

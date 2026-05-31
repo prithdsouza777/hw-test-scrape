@@ -3,11 +3,21 @@ from datetime import datetime
 
 
 class ProductTracker:
-    def __init__(self, max_alerts=50, max_monitored_products=20):
+    def __init__(
+        self,
+        max_alerts=50,
+        max_monitored_products=20,
+        missing_confirmation_snapshots=2,
+    ):
+        if missing_confirmation_snapshots < 1:
+            raise ValueError("missing_confirmation_snapshots must be at least 1")
+
         self.max_alerts = max_alerts
         self.max_monitored_products = max_monitored_products
+        self.missing_confirmation_snapshots = missing_confirmation_snapshots
         self.current_products = {}
         self.seen_products = {}
+        self.missing_counts = {}
         self.alerts = []
         self.monitored_products = []
         self.initialized = False
@@ -22,9 +32,12 @@ class ProductTracker:
 
         missing_ids = self.seen_products.keys() - products.keys()
         for product_id in missing_ids:
-            self.seen_products[product_id]["in_stock"] = False
+            self.missing_counts[product_id] = self.missing_counts.get(product_id, 0) + 1
+            if self.missing_counts[product_id] >= self.missing_confirmation_snapshots:
+                self.seen_products[product_id]["in_stock"] = False
 
         for product_id, product in products.items():
+            self.missing_counts.pop(product_id, None)
             old_product = self.seen_products.get(product_id)
             if old_product is None:
                 if self.initialized and product["in_stock"]:
