@@ -102,7 +102,6 @@
             border: 1px solid #333;
             display: flex;
             flex-direction: column;
-            justify-content: space-between;
         }
 
         .product-card:hover {
@@ -163,17 +162,24 @@
         }
 
         .product-link.add-to-cart {
-            background: #03dac6;
+            background: #333;
+            color: #e0e0e0;
         }
 
         .product-link.secondary {
-            background: #333;
-            color: #e0e0e0;
-            margin-top: 8px;
+            background: #bb86fc;
+            color: #000;
+        }
+
+        .product-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: auto;
         }
 
         .cart-status {
-            color: #03dac6;
+            color: #bb86fc;
             font-size: 0.78em;
             margin-bottom: 10px;
         }
@@ -267,6 +273,8 @@
             border: 1px solid #333;
             flex-shrink: 0;
             position: relative;
+            display: flex;
+            flex-direction: column;
         }
 
         .monitor-card img {
@@ -475,6 +483,13 @@
             return link;
         }
 
+        function createProductActions(product) {
+            const actions = createElement('div', 'product-actions');
+            actions.appendChild(createViewProductButton(product));
+            actions.appendChild(createAddToCartButton(product));
+            return actions;
+        }
+
         function renderAlerts(alerts) {
             const container = document.getElementById('alerts-container');
             const elements = [];
@@ -544,8 +559,7 @@
                 alertTime.style.marginBottom = '8px';
                 card.appendChild(alertTime);
                 card.appendChild(createCartStatus(product));
-                card.appendChild(createViewProductButton(product));
-                card.appendChild(createAddToCartButton(product));
+                card.appendChild(createProductActions(product));
                 return card;
             });
             container.replaceChildren(...cards);
@@ -596,8 +610,7 @@
                 name.title = product.name;
                 card.appendChild(name);
                 card.appendChild(createCartStatus(product));
-                card.appendChild(createViewProductButton(product));
-                card.appendChild(createAddToCartButton(product));
+                card.appendChild(createProductActions(product));
                 return card;
             });
             container.replaceChildren(...cards);
