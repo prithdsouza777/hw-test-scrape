@@ -5,11 +5,14 @@ from unittest.mock import patch
 from monitor_api import (
     ApiScrapeError,
     _decode_page,
+    _build_gap_product_candidates,
+    LISTING_SORT_EXPRESSIONS,
     fetch_api_products,
     parse_cart_product_count,
     parse_api_product,
     parse_detail_api_stock_count,
     parse_detail_stock_count,
+    parse_gap_product,
     verify_in_stock_products,
 )
 
@@ -137,6 +140,37 @@ class ApiProductParsingTests(unittest.TestCase):
 
         self.assertEqual(4, parse_detail_stock_count(payload, "123"))
 
+    def test_parse_gap_product_accepts_hot_wheels_stock(self):
+        payload = {
+            "PInfo": {
+                "pid": 123,
+                "pnm": "Hot Wheels Hidden Car - Blue",
+                "BID": 113,
+                "CurSt": 2,
+                "Img": "123a.jpg;123b.jpg;",
+            },
+            "PColor": [{"pid": 123, "CS": 2}],
+        }
+
+        product = parse_gap_product(payload, "123")
+
+        self.assertEqual("123", product["id"])
+        self.assertEqual(2, product["stock_count"])
+        self.assertTrue(product["in_stock"])
+        self.assertEqual("gap_product_api", product["stock_signal"])
+        self.assertEqual(
+            "https://cdn.fcglcdn.com/brainbees/images/products/219x265/123a.webp",
+            product["image"],
+        )
+
+    def test_parse_gap_product_ignores_non_hot_wheels_products(self):
+        payload = {
+            "PInfo": {"pid": 123, "pnm": "Other Brand Car", "BID": 999, "CurSt": 2},
+            "PColor": [{"pid": 123, "CS": 2}],
+        }
+
+        self.assertIsNone(parse_gap_product(payload, "123"))
+
     def test_parse_detail_stock_count_does_not_trust_stale_curst(self):
         html = (
             '<script>var CurrentProductDetailJSON={"123":{"CS":0,"pn":"Car"}},'
@@ -162,6 +196,30 @@ class ApiProductParsingTests(unittest.TestCase):
 
 
 class ApiPaginationTests(unittest.TestCase):
+    def test_default_listing_sorts_include_stock_relevant_firstcry_feeds(self):
+        self.assertEqual(
+            (
+                "popularity",
+                "NewArrivals",
+                "HighestDiscount",
+                "Rating",
+            ),
+            LISTING_SORT_EXPRESSIONS,
+        )
+
+    def test_build_gap_product_candidates_scans_small_missing_id_gaps(self):
+        products = {
+            "100": {"id": "100"},
+            "103": {"id": "103"},
+            "130": {"id": "130"},
+            "abc": {"id": "abc"},
+        }
+
+        self.assertEqual(
+            ("101", "102"),
+            _build_gap_product_candidates(products),
+        )
+
     def test_fetch_api_products_reads_all_pages_and_deduplicates_variants(self):
         calls = []
 
@@ -226,6 +284,40 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual(5, products["1"]["stock_count"])
         self.assertTrue(products["1"]["in_stock"])
         self.assertEqual(3, products["2"]["stock_count"])
+
+    def test_fetch_api_products_adds_gap_products_before_verification(self):
+        def page_fetcher(page_number):
+            return make_page(
+                [
+                    make_raw_product("10", stock="0"),
+                    make_raw_product("13", stock="0"),
+                ],
+                expected_products=2,
+            )
+
+        def gap_product_fetcher(products):
+            self.assertEqual(["10", "13"], sorted(products))
+            return {
+                "11": {
+                    "id": "11",
+                    "name": "Hot Wheels Hidden Product",
+                    "in_stock": True,
+                    "stock_count": 2,
+                    "link": "https://www.firstcry.com/hot-wheels/hidden/11/product-detail",
+                    "image": "",
+                    "stock_signal": "gap_product_api",
+                }
+            }
+
+        products, result = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=None,
+            gap_product_fetcher=gap_product_fetcher,
+        )
+
+        self.assertEqual(3, result.unique_products)
+        self.assertEqual(2, products["11"]["stock_count"])
+        self.assertTrue(products["11"]["in_stock"])
 
     def test_fetch_api_products_rejects_incomplete_snapshot(self):
         def page_fetcher(page_number):
