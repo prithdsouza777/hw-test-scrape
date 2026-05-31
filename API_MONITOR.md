@@ -17,11 +17,11 @@ zero-to-positive restock without inferring stock from rendered buttons.
 Double-click `run_api.bat`, then open:
 
 ```text
-http://127.0.0.1:5000
+http://127.0.0.1:5001
 ```
 
-Run either `run.bat` or `run_api.bat`, not both at the same time, because both
-dashboards use port `5000`.
+`run_api.bat` uses port `5001`, so it can run beside the existing Selenium
+dashboard on port `5000` while you compare signals.
 
 ## Important Caveat
 
