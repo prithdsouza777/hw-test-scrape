@@ -86,16 +86,18 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertIn(".product-actions", html)
         self.assertIn("background: #bb86fc", html)
         self.assertIn("background: #333", html)
+        self.assertIn("firstcryCartAction", html)
+        self.assertIn("productId", html)
+        self.assertIn("productImage", html)
         self.assertIn("target = '_blank'", html.replace('"', "'"))
         self.assertNotIn("/api/add-to-cart", html)
+        self.assertNotIn("hw_auto_add", html)
         self.assertNotIn("Selenium", html)
         self.assertNotIn("OPEN PRODUCT", html)
 
         response = self.client.get("/api/data")
         payload = response.get_json()
-        self.assertIn("hw_auto_add=1", payload["products"]["1"]["add_to_cart_link"])
-        self.assertIn("hw_checkout=1", payload["products"]["1"]["add_to_cart_link"])
-        self.assertIn("hw_pid=1", payload["products"]["1"]["add_to_cart_link"])
+        self.assertNotIn("add_to_cart_link", payload["products"]["1"])
 
 
 if __name__ == "__main__":
