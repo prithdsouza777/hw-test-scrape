@@ -1,25 +1,7 @@
 import unittest
-from unittest.mock import patch
 
 import app as app_module
 from product_tracker import ProductTracker
-
-
-class FakeSwitchTo:
-    def __init__(self, driver):
-        self.driver = driver
-
-    def new_window(self, kind):
-        self.driver.opened_new_tab = kind == "tab"
-        self.driver.window_handles.append("new-tab")
-
-
-class FakeDriver:
-    def __init__(self, current_url, handles):
-        self.current_url = current_url
-        self.window_handles = list(handles)
-        self.opened_new_tab = False
-        self.switch_to = FakeSwitchTo(self)
 
 
 class ApiDashboardTests(unittest.TestCase):
@@ -85,7 +67,7 @@ class ApiDashboardTests(unittest.TestCase):
             payload["products"]["1"]["cart_cookie_name"],
         )
         self.assertEqual(
-            "https://www.firstcry.com/cart",
+            "https://checkout.firstcry.com/pay",
             payload["products"]["1"]["cart_url"],
         )
         self.assertEqual(1, payload["pending_count"])
@@ -100,42 +82,10 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertIn("Hot Wheels Monitor", html)
         self.assertIn("Cart Accepted", html)
         self.assertIn("ADD TO CART", html)
+        self.assertIn("target = '_blank'", html.replace('"', "'"))
+        self.assertNotIn("/api/add-to-cart", html)
+        self.assertNotIn("Selenium", html)
         self.assertNotIn("OPEN PRODUCT", html)
-
-    def test_add_to_cart_opens_cart_browser_for_buyable_product(self):
-        with patch.object(
-            app_module,
-            "add_product_to_firstcry_cart",
-            return_value="NO^1^1^0",
-        ) as add_to_cart:
-            response = self.client.post("/api/add-to-cart/1")
-
-        payload = response.get_json()
-        self.assertEqual(200, response.status_code)
-        self.assertTrue(payload["ok"])
-        self.assertEqual("NO^1^1^0", payload["cart_cookie"])
-        add_to_cart.assert_called_once()
-
-    def test_add_to_cart_rejects_non_buyable_product(self):
-        response = self.client.post("/api/add-to-cart/2")
-        payload = response.get_json()
-
-        self.assertEqual(409, response.status_code)
-        self.assertFalse(payload["ok"])
-
-    def test_open_new_cart_tab_reuses_initial_blank_tab(self):
-        driver = FakeDriver(current_url="data:,", handles=["initial"])
-
-        app_module._open_new_cart_tab(driver)
-
-        self.assertFalse(driver.opened_new_tab)
-
-    def test_open_new_cart_tab_opens_tab_after_first_use(self):
-        driver = FakeDriver(current_url="https://www.firstcry.com/cart", handles=["cart"])
-
-        app_module._open_new_cart_tab(driver)
-
-        self.assertTrue(driver.opened_new_tab)
 
 
 if __name__ == "__main__":
