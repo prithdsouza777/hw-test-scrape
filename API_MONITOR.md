@@ -32,12 +32,21 @@ order or recently viewed products, create `watchlist.txt` beside `run.bat` and
 paste one product ID or FirstCry product URL per line. Both local files are
 ignored by git.
 
-The dashboard separates the signals:
+The dashboard is centered on buyability, not the product page button:
 
-- `In Stock`: accepted by the cart product-count API.
+- `Cart Accepted`: accepted by the cart product-count API. This is the main
+  dashboard count and the only state that triggers a buyable alert.
 - `Cart Pending`: listing/product API stock is positive, but cart validation still
   rejects the item. These products may become cartable after FirstCry's stock
   data finishes propagating.
+
+For cart-accepted products, the dashboard shows `ADD TO CART` instead of an
+open-product action. The button opens FirstCry and tries to hand off the same
+cart cookie format FirstCry uses (`NO^{product_id}^1^0`). Because browser
+security prevents a local `127.0.0.1` page from directly setting cookies on
+`firstcry.com`, the button also copies the FirstCry-domain helper script as a
+fallback. If the browser blocks the handoff and the cart does not update, paste
+the copied helper into the address bar while you are on a FirstCry page.
 
 ## Run
 

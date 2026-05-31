@@ -29,6 +29,13 @@ a failed scrape must not be treated as a real out-of-stock event.
 - Keep known-product cart probing enabled unless a live audit proves it is no
   longer needed. FirstCry can accept add-to-cart from carousel/reorder paths
   for products that are hidden or out of stock on their main product page.
+- Treat cart acceptance as the primary buyability signal. Product page buttons,
+  listing stock, and product API stock are secondary because they can lag behind
+  or get ahead of the cart system.
+- Be explicit about browser-domain limits for cart actions. A local dashboard
+  cannot directly set `firstcry.com` cart cookies unless the action is handed
+  off to a FirstCry page or the user provides an authenticated same-domain
+  mechanism.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose
