@@ -4,6 +4,7 @@ import math
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -27,6 +28,7 @@ API_URL = (
 )
 IMAGE_BASE_URL = "https://cdn.fcglcdn.com/brainbees/images/products/219x265/"
 PAGE_SIZE = 20
+PRODUCT_DETAIL_JSON_PATTERN = re.compile(r"(?:^|[;,])\s*ProductDetailJSON\s*=")
 
 
 class ApiScrapeError(RuntimeError):
@@ -60,9 +62,16 @@ def _env_int(name, default):
 
 
 REQUEST_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_TIMEOUT", 20)
+DETAIL_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_DETAIL_TIMEOUT", 10)
 POLL_INTERVAL_SECONDS = _env_float("FIRSTCRY_API_POLL_INTERVAL", 60)
 MAX_PAGES = _env_int("FIRSTCRY_API_MAX_PAGES", 30)
+DETAIL_WORKERS = _env_int("FIRSTCRY_API_DETAIL_WORKERS", 8)
 MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
+VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
 USER_AGENT = os.getenv(
     "FIRSTCRY_API_USER_AGENT",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FirstCryStockMonitor/1.0",
@@ -165,6 +174,35 @@ def _build_image_url(images):
     return IMAGE_BASE_URL + image_name
 
 
+def _extract_balanced_json(text, start_index):
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index in range(start_index, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start_index : index + 1]
+
+    raise ApiScrapeError("FirstCry product detail page has incomplete JSON data")
+
+
 def parse_api_product(raw_product):
     product_id = str(raw_product.get("PId", "")).strip()
     name = str(raw_product.get("PNm", "")).strip()
@@ -179,7 +217,93 @@ def parse_api_product(raw_product):
         "stock_count": stock_count,
         "link": _build_product_link(product_id, name),
         "image": _build_image_url(raw_product.get("Images")),
+        "stock_signal": "listing_api",
     }
+
+
+def parse_detail_stock_count(html):
+    match = PRODUCT_DETAIL_JSON_PATTERN.search(html)
+    if not match:
+        raise ApiScrapeError("FirstCry product detail page is missing ProductDetailJSON")
+
+    json_start = html.find("{", match.end())
+    if json_start < 0:
+        raise ApiScrapeError("FirstCry product detail page is missing JSON data")
+
+    try:
+        payload = json.loads(_extract_balanced_json(html, json_start))
+        return max(0, _parse_int(payload["PInfo"]["CurSt"]))
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ApiScrapeError("FirstCry product detail page has unexpected stock data") from exc
+
+
+def fetch_detail_stock_count(product, opener=urlopen):
+    request = Request(
+        product["link"],
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "Referer": LISTING_URL,
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=DETAIL_TIMEOUT_SECONDS) as response:
+            html = response.read().decode("utf-8", errors="replace")
+            return parse_detail_stock_count(html)
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry product detail request failed: {exc}") from exc
+
+
+def verify_in_stock_products(products, detail_fetcher=fetch_detail_stock_count):
+    in_stock_products = [
+        product for product in products.values() if product.get("in_stock")
+    ]
+    if not in_stock_products:
+        return products
+
+    verified_products = dict(products)
+    max_workers = min(DETAIL_WORKERS, len(in_stock_products))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(detail_fetcher, product): product
+            for product in in_stock_products
+        }
+
+        for future in as_completed(futures):
+            product = futures[future]
+            try:
+                detail_stock_count = future.result()
+            except ApiScrapeError as exc:
+                LOGGER.warning(
+                    "Could not verify detail stock for %s (%s); keeping listing signal: %s",
+                    product["id"],
+                    product["name"],
+                    exc,
+                )
+                verified_products[product["id"]] = {
+                    **product,
+                    "stock_signal": "listing_api_detail_error",
+                }
+                continue
+
+            verified_product = {
+                **product,
+                "detail_stock_count": detail_stock_count,
+                "stock_count": detail_stock_count,
+                "in_stock": detail_stock_count > 0,
+                "stock_signal": "detail_page_curst",
+            }
+            if detail_stock_count <= 0:
+                LOGGER.info(
+                    "Detail page rejected stale listing stock for %s (%s)",
+                    product["id"],
+                    product["name"],
+                )
+            verified_products[product["id"]] = verified_product
+
+    return verified_products
 
 
 def _decode_page(raw_response):
@@ -223,7 +347,13 @@ def fetch_api_page(page_number, opener=urlopen):
         raise ApiScrapeError(f"FirstCry listing API request failed: {exc}") from exc
 
 
-def fetch_api_products(page_fetcher=fetch_api_page):
+_DEFAULT_DETAIL_VERIFIER = object()
+
+
+def fetch_api_products(
+    page_fetcher=fetch_api_page,
+    detail_verifier=_DEFAULT_DETAIL_VERIFIER,
+):
     started_at = time.monotonic()
     first_page = page_fetcher(1)
     expected_products = first_page["expected_products"]
@@ -262,6 +392,11 @@ def fetch_api_products(page_fetcher=fetch_api_page):
     for raw_product in raw_products:
         product = parse_api_product(raw_product)
         products[product["id"]] = product
+
+    if detail_verifier is _DEFAULT_DETAIL_VERIFIER:
+        detail_verifier = verify_in_stock_products if VERIFY_DETAIL_STOCK else None
+    if detail_verifier is not None:
+        products = detail_verifier(products)
 
     elapsed_seconds = time.monotonic() - started_at
     result = ApiFetchResult(
