@@ -32,10 +32,9 @@ a failed scrape must not be treated as a real out-of-stock event.
 - Treat cart acceptance as the primary buyability signal. Product page buttons,
   listing stock, and product API stock are secondary because they can lag behind
   or get ahead of the cart system.
-- Be explicit about browser-domain limits for cart actions. A local dashboard
-  cannot directly set `firstcry.com` cart cookies in the user's normal browser
-  tab; the supported dashboard cart action uses Selenium with
-  `selenium_profile` to open a real FirstCry cart tab.
+- Keep dashboard product actions as normal browser links. The `ADD TO CART`
+  dashboard action should open the FirstCry product page in a new tab using the
+  user's existing browser session, not launch Selenium or a separate browser.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose

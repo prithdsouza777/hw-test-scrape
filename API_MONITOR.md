@@ -41,13 +41,13 @@ The dashboard is centered on buyability, not the product page button:
   data finishes propagating.
 
 For cart-accepted products, the dashboard shows `ADD TO CART` instead of an
-open-product action. The button asks the local Flask app to open/reuse a
-Selenium Chrome window with the `selenium_profile` browser profile, opens a new
-tab, merges the product into FirstCry's cart cookie format
-(`NO^{product_id}^1^0`), and opens FirstCry's cart in that tab. This is
-necessary because browser security
-prevents a local `127.0.0.1` dashboard page from directly setting
-`firstcry.com` cookies in your normal tab.
+open-product action. It is a normal `target="_blank"` link to the FirstCry
+product page, so it opens in the same browser/session you are already using.
+The monitor still only shows products after cart API acceptance; the button is
+kept as a fast handoff into your logged-in FirstCry tab rather than a separate
+browser automation flow.
+FirstCry's checkout/cart page for an already-added product is
+`https://checkout.firstcry.com/pay`.
 
 ## Run
 
@@ -104,6 +104,4 @@ can still become buyable after FirstCry finishes propagating stock internally.
   out-of-stock IDs to cart-probe per scrape, default `1000`
 - `FIRSTCRY_API_KNOWN_PRODUCT_WORKERS`: concurrent known product cart checks,
   default `12`
-- `FIRSTCRY_CART_BROWSER_PROFILE`: Selenium Chrome profile directory used by
-  the dashboard `ADD TO CART` action, default `selenium_profile`
 - `FLASK_PORT`: dashboard port, default `5000`
