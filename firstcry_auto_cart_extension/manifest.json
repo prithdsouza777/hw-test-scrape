@@ -6,12 +6,13 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.firstcry.com/*/product-detail*"
+        "https://www.firstcry.com/*"
       ],
       "js": [
         "content.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "world": "MAIN"
     }
   ]
 }
