@@ -86,6 +86,26 @@ class ProductTrackerTests(unittest.TestCase):
 
         self.assertEqual("Hot Wheels 1", tracker.current_products["1"]["name"])
 
+    def test_snapshot_exposes_cart_pending_products_separately(self):
+        tracker = ProductTracker()
+        pending = make_product("2", in_stock=False)
+        pending["pending_cart"] = True
+
+        tracker.update(
+            {
+                "1": make_product("1"),
+                "2": pending,
+                "3": make_product("3", in_stock=False),
+            },
+            now=NOW,
+        )
+
+        snapshot = tracker.snapshot()
+
+        self.assertEqual(["1"], list(snapshot["products"]))
+        self.assertEqual(["2"], list(snapshot["pending_products"]))
+        self.assertEqual(1, snapshot["pending_count"])
+
 
 if __name__ == "__main__":
     unittest.main()

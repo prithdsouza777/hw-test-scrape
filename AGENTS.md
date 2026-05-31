@@ -13,6 +13,10 @@ out-of-stock event.
   and inspection scripts unless the requested task explicitly includes them.
 - Keep generated files, browser profiles, Python bytecode, and local virtual
   environments out of version control.
+- Do not add one-off Selenium inspection or auto-buy helper scripts to the
+  repository. Keep the supported entry points focused on `run.bat`,
+  `run_api.bat`, `app.py`, `app_api.py`, `monitor_selenium.py`, and
+  `monitor_api.py`.
 - Prefer deterministic parser tests with small HTML fixtures over tests that
   require a live browser.
 - Validate scraper changes with the live FirstCry listing when network access

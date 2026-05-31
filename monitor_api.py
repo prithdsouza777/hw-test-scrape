@@ -1,0 +1,590 @@
+import json
+import logging
+import math
+import os
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+from colorama import Fore, Style, init
+
+from product_tracker import ProductTracker
+
+init()
+
+LOGGER = logging.getLogger(__name__)
+
+LISTING_URL = (
+    "https://www.firstcry.com/hotwheels/5/0/113"
+    "?sort=popularity&q=ard-hotwheels&ref2=q_ard_hotwheels&asid=53241"
+)
+API_URL = (
+    "https://www.firstcry.com/svcs/SearchResult.svc/"
+    "GetSearchResultProductsPaging"
+)
+PRODUCT_DETAIL_API_URL = (
+    "https://www.firstcry.com/svcs/CommonService.svc/getProduct/pid={product_id}/uid=0"
+)
+CART_PRODUCT_COUNT_URL = (
+    "https://csc.fcappservices.in/ShoppingCart/ShoppingCart.svc/json/"
+    "GetCartProductCount"
+)
+IMAGE_BASE_URL = "https://cdn.fcglcdn.com/brainbees/images/products/219x265/"
+PAGE_SIZE = 20
+CURRENT_PRODUCT_DETAIL_JSON_PATTERN = re.compile(
+    r"(?:^|[;,]|\bvar\s+)\s*CurrentProductDetailJSON\s*="
+)
+
+
+class ApiScrapeError(RuntimeError):
+    """Raised when the listing API cannot safely replace the last snapshot."""
+
+
+@dataclass(frozen=True)
+class ApiFetchResult:
+    expected_products: int
+    raw_products: int
+    unique_products: int
+    pages_fetched: int
+    ttl_seconds: int | None
+    elapsed_seconds: float
+
+
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, default))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid %s value; using %s", name, default)
+        return float(default)
+
+
+def _env_int(name, default):
+    try:
+        return max(1, int(os.getenv(name, default)))
+    except ValueError:
+        LOGGER.warning("Ignoring invalid %s value; using %s", name, default)
+        return int(default)
+
+
+REQUEST_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_TIMEOUT", 20)
+DETAIL_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_DETAIL_TIMEOUT", 10)
+CART_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_CART_TIMEOUT", 10)
+POLL_INTERVAL_SECONDS = _env_float("FIRSTCRY_API_POLL_INTERVAL", 60)
+MAX_PAGES = _env_int("FIRSTCRY_API_MAX_PAGES", 30)
+DETAIL_WORKERS = _env_int("FIRSTCRY_API_DETAIL_WORKERS", 8)
+MIN_API_PARSE_RATIO = _env_float("FIRSTCRY_API_MIN_PARSE_RATIO", 0.95)
+MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
+VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+VERIFY_CART_STOCK = os.getenv("FIRSTCRY_API_VERIFY_CART_STOCK", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+USER_AGENT = os.getenv(
+    "FIRSTCRY_API_USER_AGENT",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FirstCryStockMonitor/1.0",
+)
+
+API_PARAMS = {
+    "PageSize": PAGE_SIZE,
+    "SortExpression": "popularity",
+    "OnSale": "5",
+    "SearchString": "brand",
+    "SubCatId": "",
+    "BrandId": "",
+    "Price": "",
+    "Age": "",
+    "Color": "",
+    "OptionalFilter": "",
+    "OutOfStock": "",
+    "Type1": "",
+    "Type2": "",
+    "Type3": "",
+    "Type4": "",
+    "Type5": "",
+    "Type6": "",
+    "Type7": "",
+    "Type8": "",
+    "Type9": "",
+    "Type10": "",
+    "Type11": "",
+    "Type12": "",
+    "Type13": "",
+    "Type14": "",
+    "Type15": "",
+    "combo": "",
+    "discount": "",
+    "searchwithincat": "",
+    "ProductidQstr": "",
+    "searchrank": "",
+    "pmonths": "",
+    "cgen": "",
+    "PriceQstr": "",
+    "DiscountQstr": "",
+    "sorting": "",
+    "MasterBrand": "113",
+    "Rating": "",
+    "Offer": "",
+    "skills": "",
+    "material": "",
+    "curatedcollections": "",
+    "measurement": "",
+    "gender": "",
+    "exclude": "",
+    "premium": "",
+    "pcode": "0",
+    "isclub": "0",
+    "deliverytype": "",
+    "author": "",
+    "booktype": "",
+    "character": "",
+    "collection": "",
+    "format": "",
+    "genre": "",
+    "booklanguage": "",
+    "publication": "",
+    "skill": "",
+}
+
+
+def _parse_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_expected_count(value):
+    if isinstance(value, list):
+        value = value[0] if value else None
+    count = _parse_int(value, default=-1)
+    return count if count >= 0 else None
+
+
+def _slugify(value):
+    slug = (value or "").lower().replace("&", " and ")
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    return slug.strip("-") or "product"
+
+
+def _build_product_link(product_id, name):
+    return (
+        f"https://www.firstcry.com/hot-wheels/{_slugify(name)}/"
+        f"{product_id}/product-detail"
+    )
+
+
+def _build_image_url(images):
+    first_image = (images or "").split(";", 1)[0].strip()
+    if not first_image:
+        return ""
+    image_name = re.sub(r"\.[^.]+$", ".webp", first_image)
+    return IMAGE_BASE_URL + image_name
+
+
+def _extract_balanced_json(text, start_index):
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for index in range(start_index, len(text)):
+        char = text[index]
+
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start_index : index + 1]
+
+    raise ApiScrapeError("FirstCry product detail page has incomplete JSON data")
+
+
+def parse_api_product(raw_product):
+    product_id = str(raw_product.get("PId", "")).strip()
+    name = str(raw_product.get("PNm", "")).strip()
+    if not product_id or not name:
+        raise ApiScrapeError("FirstCry listing API returned a product without an ID or name")
+
+    stock_count = max(0, _parse_int(raw_product.get("CrntStock")))
+    return {
+        "id": product_id,
+        "name": name,
+        "in_stock": stock_count > 0,
+        "stock_count": stock_count,
+        "link": _build_product_link(product_id, name),
+        "image": _build_image_url(raw_product.get("Images")),
+        "stock_signal": "listing_api",
+    }
+
+
+def _parse_json_assignment(html, pattern, missing_message):
+    match = pattern.search(html)
+    if not match:
+        raise ApiScrapeError(missing_message)
+
+    json_start = html.find("{", match.end())
+    if json_start < 0:
+        raise ApiScrapeError("FirstCry product detail page is missing JSON data")
+
+    try:
+        return json.loads(_extract_balanced_json(html, json_start))
+    except json.JSONDecodeError as exc:
+        raise ApiScrapeError("FirstCry product detail page has invalid JSON data") from exc
+
+
+def parse_detail_api_stock_count(payload, product_id):
+    product_id = str(product_id)
+    try:
+        for product in payload.get("PColor") or []:
+            if str(product.get("pid")) == product_id:
+                return max(0, _parse_int(product.get("CS")))
+
+        product_info = payload["PInfo"]
+        if str(product_info.get("pid")) == product_id:
+            return max(0, _parse_int(product_info.get("CurSt")))
+    except (KeyError, TypeError) as exc:
+        raise ApiScrapeError("FirstCry product API returned unexpected stock data") from exc
+    raise ApiScrapeError("FirstCry product API returned mismatched product data")
+
+
+def parse_detail_stock_count(html, product_id):
+    try:
+        payload = json.loads(html)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        return parse_detail_api_stock_count(payload, product_id)
+
+    product_details = _parse_json_assignment(
+        html,
+        CURRENT_PRODUCT_DETAIL_JSON_PATTERN,
+        "FirstCry product detail page is missing CurrentProductDetailJSON",
+    )
+
+    try:
+        stock_count = product_details[str(product_id)]["CS"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ApiScrapeError("FirstCry product detail page has unexpected stock data") from exc
+    return max(0, _parse_int(stock_count))
+
+
+def fetch_detail_stock_count(product, opener=urlopen):
+    request = Request(
+        PRODUCT_DETAIL_API_URL.format(product_id=product["id"]),
+        headers={
+            "Accept": "application/json",
+            "Referer": LISTING_URL,
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=DETAIL_TIMEOUT_SECONDS) as response:
+            html = response.read().decode("utf-8", errors="replace")
+            return parse_detail_stock_count(html, product["id"])
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry product detail request failed: {exc}") from exc
+
+
+def parse_cart_product_count(raw_response):
+    try:
+        payload = json.loads(raw_response)
+        return max(0, _parse_int(payload["GetCartProductCountResult"]))
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ApiScrapeError("FirstCry cart API returned unexpected stock data") from exc
+
+
+def fetch_cart_product_count(product, opener=urlopen):
+    payload = json.dumps(
+        {"ProCookie": f"NO^{product['id']}^1^0"},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        CART_PRODUCT_COUNT_URL,
+        data=payload,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "Origin": "https://www.firstcry.com",
+            "Referer": product["link"],
+            "User-Agent": USER_AGENT,
+        },
+        method="POST",
+    )
+
+    try:
+        with opener(request, timeout=CART_TIMEOUT_SECONDS) as response:
+            return parse_cart_product_count(
+                response.read().decode("utf-8", errors="replace")
+            )
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry cart API request failed: {exc}") from exc
+
+
+_DEFAULT_CART_FETCHER = object()
+
+
+def verify_in_stock_products(
+    products,
+    detail_fetcher=fetch_detail_stock_count,
+    cart_fetcher=_DEFAULT_CART_FETCHER,
+):
+    in_stock_products = [
+        product for product in products.values() if product.get("in_stock")
+    ]
+    if not in_stock_products:
+        return products
+
+    if cart_fetcher is _DEFAULT_CART_FETCHER:
+        cart_fetcher = fetch_cart_product_count if VERIFY_CART_STOCK else None
+
+    verified_products = dict(products)
+    max_workers = min(DETAIL_WORKERS, len(in_stock_products))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(detail_fetcher, product): product
+            for product in in_stock_products
+        }
+
+        for future in as_completed(futures):
+            product = futures[future]
+            try:
+                detail_stock_count = future.result()
+            except ApiScrapeError as exc:
+                LOGGER.warning(
+                    "Could not verify detail stock for %s (%s); keeping listing signal: %s",
+                    product["id"],
+                    product["name"],
+                    exc,
+                )
+                verified_products[product["id"]] = {
+                    **product,
+                    "stock_signal": "listing_api_product_api_error",
+                }
+                continue
+
+            verified_product = {
+                **product,
+                "detail_stock_count": detail_stock_count,
+                "stock_count": detail_stock_count,
+                "in_stock": detail_stock_count > 0,
+                "stock_signal": "product_api_current_stock",
+            }
+            if detail_stock_count <= 0:
+                LOGGER.info(
+                    "Detail page rejected stale listing stock for %s (%s)",
+                    product["id"],
+                    product["name"],
+                )
+            elif cart_fetcher is not None:
+                try:
+                    cart_product_count = cart_fetcher(product)
+                    verified_product["cart_product_count"] = cart_product_count
+                    verified_product["stock_signal"] = "cart_product_count"
+                    if cart_product_count <= 0:
+                        verified_product["in_stock"] = False
+                        verified_product["stock_count"] = 0
+                        verified_product["pending_cart"] = True
+                        verified_product["stock_signal"] = "cart_pending"
+                        LOGGER.info(
+                            "Cart API rejected stale product stock for %s (%s)",
+                            product["id"],
+                            product["name"],
+                        )
+                except ApiScrapeError as exc:
+                    LOGGER.warning(
+                        "Could not verify cart stock for %s (%s); keeping detail "
+                        "signal: %s",
+                        product["id"],
+                        product["name"],
+                        exc,
+                    )
+                    verified_product["stock_signal"] = (
+                        "product_api_current_stock_cart_error"
+                    )
+            verified_products[product["id"]] = verified_product
+
+    return verified_products
+
+
+def _decode_page(raw_response):
+    try:
+        outer_payload = json.loads(raw_response)
+        product_response = outer_payload["ProductResponse"]
+        inner_payload = (
+            json.loads(product_response)
+            if isinstance(product_response, str)
+            else product_response
+        )
+        products = inner_payload["Products"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ApiScrapeError("FirstCry listing API returned an unexpected response") from exc
+
+    if not isinstance(products, list):
+        raise ApiScrapeError("FirstCry listing API product data is not a list")
+
+    return {
+        "expected_products": _parse_expected_count(inner_payload.get("Count")),
+        "products": products,
+        "ttl_seconds": _parse_int(outer_payload.get("TTL"), default=-1),
+    }
+
+
+def fetch_api_page(page_number, opener=urlopen):
+    params = {"PageNo": page_number, **API_PARAMS}
+    request = Request(
+        API_URL + "?" + urlencode(params),
+        headers={
+            "Accept": "application/json",
+            "Referer": LISTING_URL,
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            return _decode_page(response.read().decode("utf-8", errors="replace"))
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry listing API request failed: {exc}") from exc
+
+
+_DEFAULT_DETAIL_VERIFIER = object()
+
+
+def fetch_api_products(
+    page_fetcher=fetch_api_page,
+    detail_verifier=_DEFAULT_DETAIL_VERIFIER,
+):
+    started_at = time.monotonic()
+    first_page = page_fetcher(1)
+    expected_products = first_page["expected_products"]
+    if expected_products is None:
+        raise ApiScrapeError("FirstCry listing API response is missing its product count")
+    pages_to_fetch = max(1, math.ceil(expected_products / PAGE_SIZE))
+    if pages_to_fetch > MAX_PAGES:
+        raise ApiScrapeError(
+            f"FirstCry listing API requires {pages_to_fetch} pages; "
+            f"configured maximum is {MAX_PAGES}"
+        )
+
+    pages = [first_page]
+    for page_number in range(2, pages_to_fetch + 1):
+        pages.append(page_fetcher(page_number))
+
+    raw_products = []
+    ttl_values = []
+    for page in pages:
+        if (
+            page["expected_products"] is not None
+            and page["expected_products"] != expected_products
+        ):
+            raise ApiScrapeError("FirstCry listing API product count changed mid-scrape")
+        raw_products.extend(page["products"])
+        if page["ttl_seconds"] >= 0:
+            ttl_values.append(page["ttl_seconds"])
+
+    if not raw_products:
+        raise ApiScrapeError("FirstCry listing API returned no products")
+
+    if (
+        len(raw_products) < expected_products
+        and len(raw_products) / expected_products < MIN_API_PARSE_RATIO
+    ):
+        raise ApiScrapeError(
+            "FirstCry listing API returned an incomplete snapshot: "
+            f"found {len(raw_products)} of {expected_products} products"
+        )
+    if len(raw_products) < expected_products:
+        LOGGER.warning(
+            "FirstCry listing API returned a near-complete snapshot: "
+            "found %s of %s products",
+            len(raw_products),
+            expected_products,
+        )
+
+    products = {}
+    for raw_product in raw_products:
+        product = parse_api_product(raw_product)
+        products[product["id"]] = product
+
+    if detail_verifier is _DEFAULT_DETAIL_VERIFIER:
+        detail_verifier = verify_in_stock_products if VERIFY_DETAIL_STOCK else None
+    if detail_verifier is not None:
+        products = detail_verifier(products)
+
+    elapsed_seconds = time.monotonic() - started_at
+    result = ApiFetchResult(
+        expected_products=expected_products,
+        raw_products=len(raw_products),
+        unique_products=len(products),
+        pages_fetched=len(pages),
+        ttl_seconds=min(ttl_values) if ttl_values else None,
+        elapsed_seconds=elapsed_seconds,
+    )
+    LOGGER.info(
+        "Fetched %s unique API products from %s raw rows across %s pages in %.1fs "
+        "(listing TTL: %s)",
+        result.unique_products,
+        result.raw_products,
+        result.pages_fetched,
+        result.elapsed_seconds,
+        result.ttl_seconds if result.ttl_seconds is not None else "unknown",
+    )
+    return products, result
+
+
+def monitor():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    LOGGER.info("Starting experimental FirstCry listing API monitor")
+    tracker = ProductTracker(
+        missing_confirmation_snapshots=MISSING_CONFIRMATION_SNAPSHOTS
+    )
+
+    try:
+        while True:
+            started_at = time.monotonic()
+            try:
+                products, _ = fetch_api_products()
+                for event in tracker.update(products):
+                    product = event["product"]
+                    label = "NEW PRODUCT" if event["type"] == "NEW" else "BACK IN STOCK"
+                    print(
+                        f"{Fore.GREEN}[{label}] {product['name']} "
+                        f"(stock: {product['stock_count']}) - "
+                        f"{product['link']}{Style.RESET_ALL}"
+                    )
+            except ApiScrapeError:
+                LOGGER.exception("API scrape failed; retaining the previous snapshot")
+
+            duration = time.monotonic() - started_at
+            time.sleep(max(1.0, POLL_INTERVAL_SECONDS - duration))
+    except KeyboardInterrupt:
+        print(f"\n{Fore.CYAN}Stopping experimental API monitor.{Style.RESET_ALL}")
+
+
+if __name__ == "__main__":
+    monitor()

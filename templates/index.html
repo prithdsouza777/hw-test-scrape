@@ -276,6 +276,17 @@
             background-color: #bb86fc;
         }
 
+        .monitor-badge.pending {
+            background-color: #ffb74d;
+        }
+
+        .pending-note {
+            color: #ffcc80;
+            font-size: 0.8em;
+            line-height: 1.35;
+            margin-bottom: 10px;
+        }
+
         .sound-toggle {
             background: #333;
             color: #e0e0e0;
@@ -300,7 +311,11 @@
         <h1>In-Stock Monitor <span id="loading" class="loading-indicator"></span></h1>
 
         <div class="stats-bar">
-            <div class="stat-item">In Stock: <span id="total-count" class="stat-value">0</span></div>
+            <div class="stat-item">
+                In Stock: <span id="total-count" class="stat-value">0</span>
+                <span style="margin-left: 12px;">Cart Pending:</span>
+                <span id="pending-count" class="stat-value">0</span>
+            </div>
             <div class="stat-item">
                 Updated: <span id="last-updated" class="stat-value">Waiting...</span>
                 <button id="sound-toggle" class="sound-toggle" onclick="toggleSound()">Sound: OFF</button>
@@ -320,6 +335,15 @@
 
         <div class="alerts-section" id="alerts-container">
             <!-- Alerts will go here -->
+        </div>
+
+        <div class="monitor-section" id="pending-section" style="display: none;">
+            <div class="monitor-header">
+                <div class="monitor-title">Cart Pending (Page says stock, cart rejects)</div>
+            </div>
+            <div class="monitor-grid" id="pending-container">
+                <!-- Pending cart-confirmation items will go here -->
+            </div>
         </div>
 
         <div class="product-grid" id="products-container">
@@ -483,6 +507,41 @@
             container.replaceChildren(...cards);
         }
 
+        function renderPendingProducts(products) {
+            const section = document.getElementById('pending-section');
+            const container = document.getElementById('pending-container');
+            const values = Object.values(products);
+
+            if (!values.length) {
+                section.style.display = 'none';
+                container.replaceChildren();
+                return;
+            }
+
+            section.style.display = 'block';
+            const cards = values.map(product => {
+                const card = createElement('div', 'monitor-card');
+                card.appendChild(createElement('span', 'monitor-badge pending', 'PENDING'));
+                card.appendChild(createImage(product, true));
+
+                const name = createElement('div', 'product-name', product.name);
+                name.title = product.name;
+                name.style.fontSize = '0.85em';
+                name.style.marginBottom = '10px';
+                card.appendChild(name);
+
+                const note = createElement(
+                    'div',
+                    'pending-note',
+                    'Product page shows stock, but cart API is not accepting it yet.'
+                );
+                card.appendChild(note);
+                card.appendChild(createProductLink(product, 'OPEN PRODUCT'));
+                return card;
+            });
+            container.replaceChildren(...cards);
+        }
+
         function renderProducts(products) {
             const container = document.getElementById('products-container');
             const cards = Object.values(products).map(product => {
@@ -508,6 +567,7 @@
                 })
                 .then(data => {
                     document.getElementById('total-count').textContent = data.total_count;
+                    document.getElementById('pending-count').textContent = data.pending_count || 0;
                     document.getElementById('last-updated').textContent = data.last_updated;
                     document.getElementById('loading').style.display = data.is_scraping ? 'inline-block' : 'none';
 
@@ -519,6 +579,7 @@
 
                     renderAlerts(data.alerts || []);
                     renderMonitoredProducts(data.monitored_products || []);
+                    renderPendingProducts(data.pending_products || {});
                     renderProducts(data.products || {});
                     firstLoad = false;
                 })
