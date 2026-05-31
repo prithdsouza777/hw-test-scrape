@@ -462,8 +462,9 @@
 
         function createAddToCartButton(product) {
             const link = createProductLink(product, 'ADD TO CART');
+            link.href = product.add_to_cart_link || product.link;
             link.className = 'product-link add-to-cart';
-            link.title = 'Cart API accepted this product. Opens the FirstCry product page in a new tab.';
+            link.title = 'Cart API accepted this product. Opens FirstCry, auto-adds with the helper extension, then goes to checkout.';
             return link;
         }
 

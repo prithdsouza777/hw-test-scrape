@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "FirstCry Auto Cart Helper",
+  "version": "1.0.0",
+  "description": "Adds Hot Wheels monitor auto-add links to the FirstCry cart and redirects to checkout.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.firstcry.com/*/product-detail*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
