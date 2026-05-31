@@ -162,6 +162,11 @@
             opacity: 0.9;
         }
 
+        .product-link:disabled {
+            cursor: wait;
+            opacity: 0.65;
+        }
+
         .product-link.add-to-cart {
             background: #03dac6;
         }
@@ -388,8 +393,6 @@
         let seenAlerts = new Set();
         let firstLoad = true;
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const FIRSTCRY_CART_URL = 'https://www.firstcry.com/cart';
-        const FIRSTCRY_CART_COOKIE_NAME = '_$FC$_cookies_for_cart_v2_';
 
         function toggleSound() {
             soundEnabled = !soundEnabled;
@@ -475,51 +478,6 @@
             return createElement('div', 'cart-status', text);
         }
 
-        function cartCookieValue(product) {
-            return product.cart_cookie || `NO^${product.id}^1^0`;
-        }
-
-        function buildFirstCryAddScript(product) {
-            const cookieName = product.cart_cookie_name || FIRSTCRY_CART_COOKIE_NAME;
-            const cookieValue = cartCookieValue(product);
-            const productId = String(product.id);
-            const cartUrl = product.cart_url || FIRSTCRY_CART_URL;
-            const productUrl = product.link || cartUrl;
-
-            return 'javascript:(()=>{' +
-                `const n=${JSON.stringify(cookieName)};` +
-                `const v=${JSON.stringify(cookieValue)};` +
-                'document.cookie=n+"="+encodeURIComponent(v)+"; path=/; domain=.firstcry.com; max-age=604800; SameSite=Lax";' +
-                'try{localStorage.removeItem("CartCookieData");localStorage.removeItem("CartCookie")}catch(e){}' +
-                `if(typeof AddToCart==="function"){AddToCart(${JSON.stringify(productId)},"1","NO","0",true,false,false)}` +
-                `else if(typeof AddToCart_1==="function"){AddToCart_1(${JSON.stringify(productId)},"1","NO","0",true,false,false)}` +
-                `else{location.href=${JSON.stringify(productUrl)}}` +
-                `setTimeout(()=>{location.href=${JSON.stringify(cartUrl)}},500)` +
-                '})()';
-        }
-
-        function copyText(text) {
-            if (navigator.clipboard && window.isSecureContext) {
-                return navigator.clipboard.writeText(text);
-            }
-
-            const textArea = document.createElement('textarea');
-            textArea.value = text;
-            textArea.style.position = 'fixed';
-            textArea.style.opacity = '0';
-            document.body.appendChild(textArea);
-            textArea.focus();
-            textArea.select();
-            try {
-                document.execCommand('copy');
-                return Promise.resolve();
-            } catch (error) {
-                return Promise.reject(error);
-            } finally {
-                document.body.removeChild(textArea);
-            }
-        }
-
         function showActionStatus(message, isError = false) {
             const status = document.getElementById('action-status');
             status.textContent = message;
@@ -529,49 +487,37 @@
             status.style.color = isError ? '#ffb4bf' : '#b2fff7';
         }
 
-        function attemptFirstCryCartHandoff(product, addScript) {
-            const popup = window.open(product.link || FIRSTCRY_CART_URL, `firstcry-cart-${product.id}`);
-            if (!popup) {
-                return false;
-            }
+        function handleAddToCart(product, button) {
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.textContent = 'ADDING...';
+            showActionStatus(`Adding ${product.name} to the Selenium FirstCry cart window...`);
 
-            window.setTimeout(() => {
-                try {
-                    popup.location.href = addScript;
-                } catch (error) {
-                    console.debug('FirstCry cart handoff was blocked by the browser:', error);
-                }
-            }, 1800);
-            return true;
-        }
-
-        function handleAddToCart(product) {
-            const addScript = buildFirstCryAddScript(product);
-            const opened = attemptFirstCryCartHandoff(product, addScript);
-            copyText(addScript)
-                .then(() => {
-                    const prefix = opened
-                        ? 'Opened FirstCry and attempted cart handoff.'
-                        : 'Popup was blocked.';
+            fetch(`/api/add-to-cart/${encodeURIComponent(product.id)}`, { method: 'POST' })
+                .then(response => response.json().then(payload => ({ response, payload })))
+                .then(({ response, payload }) => {
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || `Add to cart failed with HTTP ${response.status}`);
+                    }
                     showActionStatus(
-                        `${prefix} The FirstCry add helper was copied too; if the cart does not update, paste it in the address bar while you are on firstcry.com.`
+                        `Added ${product.name} to the FirstCry cart window. Checkout there.`
                     );
                 })
-                .catch(() => {
-                    showActionStatus(
-                        opened
-                            ? 'Opened FirstCry and attempted cart handoff. Browser clipboard copy failed.'
-                            : 'Popup and clipboard were blocked by the browser.',
-                        true
-                    );
+                .catch(error => {
+                    showActionStatus(error.message, true);
+                    console.error('Add to cart failed:', error);
+                })
+                .finally(() => {
+                    button.disabled = false;
+                    button.textContent = originalText;
                 });
         }
 
         function createAddToCartButton(product) {
             const button = createElement('button', 'product-link add-to-cart', 'ADD TO CART');
             button.type = 'button';
-            button.title = 'Cart API accepted this product. Tries to add it through FirstCry and copies the helper as fallback.';
-            button.addEventListener('click', () => handleAddToCart(product));
+            button.title = 'Cart API accepted this product. Opens a Selenium FirstCry cart window and adds it there.';
+            button.addEventListener('click', () => handleAddToCart(product, button));
             return button;
         }
 
