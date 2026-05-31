@@ -1,16 +1,39 @@
 {
   "manifest_version": 3,
-  "name": "FirstCry Auto Cart Helper",
-  "version": "1.0.0",
-  "description": "Adds Hot Wheels monitor auto-add links to the FirstCry cart and redirects to checkout.",
+  "name": "FirstCry Cart Bridge",
+  "version": "2.0.0",
+  "description": "Adds cart-accepted Hot Wheels products from the local dashboard to the FirstCry cart and opens checkout.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://*.firstcry.com/*",
+    "https://firstcry.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
-        "https://www.firstcry.com/*",
-        "https://firstcry.com/*"
+        "http://127.0.0.1/*",
+        "http://localhost/*"
       ],
       "js": [
-        "content.js"
+        "dashboard_content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.firstcry.com/orderdetails*",
+        "https://firstcry.com/orderdetails*"
+      ],
+      "js": [
+        "orderdetails_content.js"
       ],
       "run_at": "document_idle"
     }
@@ -18,7 +41,7 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "page_auto_cart.js"
+        "orderdetails_page_runner.js"
       ],
       "matches": [
         "https://www.firstcry.com/*",
