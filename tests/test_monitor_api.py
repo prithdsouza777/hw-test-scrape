@@ -91,18 +91,27 @@ class ApiProductParsingTests(unittest.TestCase):
 
         self.assertIsNone(page["expected_products"])
 
-    def test_parse_detail_stock_count_reads_product_detail_curst(self):
+    def test_parse_detail_stock_count_reads_current_product_stock(self):
         html = (
-            '<script>var CurrentProductDetailJSON={},'
-            'ProductDetailJSON={"PInfo":{"pid":123,"CurSt":2,"pnm":"Car"},'
-            '"PColor":[]};</script>'
+            '<script>var CurrentProductDetailJSON={"123":{"CS":2,"pn":"Car"}},'
+            'ProductDetailJSON={"PInfo":{"pid":123,"CurSt":0,"pnm":"Car"}};'
+            "</script>"
         )
 
-        self.assertEqual(2, parse_detail_stock_count(html))
+        self.assertEqual(2, parse_detail_stock_count(html, "123"))
+
+    def test_parse_detail_stock_count_does_not_trust_stale_curst(self):
+        html = (
+            '<script>var CurrentProductDetailJSON={"123":{"CS":0,"pn":"Car"}},'
+            'ProductDetailJSON={"PInfo":{"pid":123,"CurSt":5,"pnm":"Car"}};'
+            "</script>"
+        )
+
+        self.assertEqual(0, parse_detail_stock_count(html, "123"))
 
     def test_parse_detail_stock_count_rejects_missing_detail_json(self):
-        with self.assertRaisesRegex(ApiScrapeError, "missing ProductDetailJSON"):
-            parse_detail_stock_count("<html></html>")
+        with self.assertRaisesRegex(ApiScrapeError, "missing CurrentProductDetailJSON"):
+            parse_detail_stock_count("<html></html>", "123")
 
 
 class ApiPaginationTests(unittest.TestCase):
@@ -141,6 +150,23 @@ class ApiPaginationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ApiScrapeError, "incomplete snapshot"):
             fetch_api_products(page_fetcher=page_fetcher, detail_verifier=None)
+
+    def test_fetch_api_products_allows_near_complete_snapshot(self):
+        def page_fetcher(page_number):
+            if page_number == 1:
+                return make_page(
+                    [make_raw_product(str(index), stock="1") for index in range(20)],
+                    expected_products=21,
+                )
+            return make_page([], expected_products=21)
+
+        products, result = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=None,
+        )
+
+        self.assertEqual(20, result.raw_products)
+        self.assertEqual(20, len(products))
 
     def test_fetch_api_products_rejects_missing_first_page_count(self):
         def page_fetcher(page_number):
@@ -190,7 +216,10 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertFalse(products["1"]["in_stock"])
         self.assertEqual(0, products["1"]["stock_count"])
         self.assertEqual(0, products["1"]["detail_stock_count"])
-        self.assertEqual("detail_page_curst", products["1"]["stock_signal"])
+        self.assertEqual(
+            "detail_page_current_product_cs",
+            products["1"]["stock_signal"],
+        )
         self.assertTrue(products["2"]["in_stock"])
         self.assertEqual(2, products["2"]["stock_count"])
         self.assertEqual(2, products["2"]["detail_stock_count"])
