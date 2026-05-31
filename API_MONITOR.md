@@ -7,8 +7,9 @@ page lazy-loads:
 https://www.firstcry.com/svcs/SearchResult.svc/GetSearchResultProductsPaging
 ```
 
-The monitor merges the `popularity` and `newarrivals` sort feeds by default
-because FirstCry can publish newly stocked cards to one sort before another.
+The monitor merges the stock-relevant visible sort feeds by default because
+FirstCry can publish newly stocked cards to one sort before another. The default
+set is `popularity`, `NewArrivals`, `HighestDiscount`, and `Rating`.
 The response exposes each product's `CrntStock` quantity. For products where
 the listing API claims stock is available, the monitor also calls
 `CommonService.svc/getProduct/pid={pid}/uid=0` and confirms the matching
@@ -16,6 +17,12 @@ the listing API claims stock is available, the monitor also calls
 isolated synthetic cart cookie. The cart check catches products that still look
 available upstream but are removed when added to cart. This check does not use
 or modify your browser cart.
+
+After listing discovery, the monitor also probes small numeric gaps between
+listed product IDs. FirstCry sometimes keeps cartable Hot Wheels product pages
+live inside those gaps even when they are missing as standalone listing rows.
+Gap products still must pass the product API and cart-count checks before they
+show as in stock.
 
 The dashboard separates the signals:
 
@@ -60,5 +67,13 @@ can still become buyable after FirstCry finishes propagating stock internally.
 - `FIRSTCRY_API_MISSING_CONFIRMATIONS`: missing snapshots required before a
   returning product alerts as restocked, default `2`
 - `FIRSTCRY_API_SORT_EXPRESSIONS`: comma-separated listing sorts to merge,
-  default `popularity,newarrivals`
+  default `popularity,NewArrivals,HighestDiscount,Rating`
+- `FIRSTCRY_API_DISCOVER_GAP_PRODUCTS`: set to `0` to disable direct product
+  probing for small gaps between listed product IDs, default enabled
+- `FIRSTCRY_API_GAP_PRODUCT_MAX_GAP`: largest numeric product-ID gap to probe,
+  default `20`
+- `FIRSTCRY_API_GAP_PRODUCT_MAX_CANDIDATES`: maximum gap product IDs to probe
+  per scrape, default `300`
+- `FIRSTCRY_API_GAP_PRODUCT_WORKERS`: concurrent gap product API checks,
+  default `12`
 - `FLASK_PORT`: dashboard port, default `5000`
