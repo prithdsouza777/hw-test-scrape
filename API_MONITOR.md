@@ -40,22 +40,21 @@ The dashboard is centered on buyability, not the product page button:
   rejects the item. These products may become cartable after FirstCry's stock
   data finishes propagating.
 
-For cart-accepted products, the dashboard shows `ADD TO CART` instead of an
-open-product action. It is a normal `target="_blank"` link to the FirstCry
-product page, so it opens in the same browser/session you are already using.
-The monitor still only shows products after cart API acceptance; the button is
-kept as a fast handoff into your logged-in FirstCry tab rather than a separate
-browser automation flow.
+For cart-accepted products, the dashboard shows both `VIEW PRODUCT` and
+`ADD TO CART`. `VIEW PRODUCT` is a normal `target="_blank"` product page link.
+`ADD TO CART` also opens in your existing browser session, but it includes the
+auto-add flags used by the helper extension.
 FirstCry's checkout/cart page for an already-added product is
 `https://checkout.firstcry.com/pay`.
 
 To make that new FirstCry tab auto-add the product and continue to checkout,
 load the local unpacked Chrome extension in `firstcry_auto_cart_extension`.
 The dashboard appends `hw_auto_add=1&hw_checkout=1&hw_pid={product_id}` to its
-product links; the extension sees that flag on `firstcry.com`, calls
-FirstCry's own `AddToCart(pid, 1, "NO", "0", ...)`, then redirects the tab to
-`https://checkout.firstcry.com/pay`. Without the extension, the same link still
-opens the product page normally.
+add-to-cart links. The extension sees that flag on `firstcry.com`, clicks
+FirstCry's real `.add_to_cart` button, waits for the cart cookie or
+`GO TO CART` button, then clicks `GO TO CART` or redirects to FirstCry's
+checkout URL. If the page does not confirm the item was added, it stays on the
+product page instead of pretending the add succeeded.
 
 ## Run
 

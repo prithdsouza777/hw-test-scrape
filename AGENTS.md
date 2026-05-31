@@ -37,6 +37,10 @@ a failed scrape must not be treated as a real out-of-stock event.
   user's existing browser session, not launch Selenium or a separate browser.
   Auto-add and checkout redirect behavior is handled by the local
   `firstcry_auto_cart_extension` Chrome extension running on `firstcry.com`.
+- Keep `VIEW PRODUCT` as a plain product-page link and `ADD TO CART` as the
+  auto-add handoff. The extension should mirror FirstCry's PDP flow: click the
+  real add button, wait for cart confirmation or `GO TO CART`, then continue to
+  checkout.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose

@@ -12,5 +12,6 @@ checkout.
 4. Select this folder: `firstcry_auto_cart_extension`.
 
 After that, dashboard links containing `hw_auto_add=1` will open in your normal
-Chrome session, call FirstCry's own `AddToCart(...)` function on the product
-page, and redirect to `https://checkout.firstcry.com/pay`.
+Chrome session, click FirstCry's own `ADD TO CART` button on the product page,
+wait for FirstCry's cart confirmation, and then follow `GO TO CART` to
+`https://checkout.firstcry.com/pay`.
