@@ -81,6 +81,7 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("Hot Wheels Monitor", html)
         self.assertIn("Cart Accepted", html)
+        self.assertIn("VIEW PRODUCT", html)
         self.assertIn("ADD TO CART", html)
         self.assertIn("target = '_blank'", html.replace('"', "'"))
         self.assertNotIn("/api/add-to-cart", html)
