@@ -245,21 +245,22 @@ def build_cart_cookie_value(product_id, quantity=1):
 
 def build_auto_add_link(product):
     parts = urlsplit(product["link"])
+    auto_add_params = {
+        "hw_auto_add": "1",
+        "hw_checkout": "1",
+        "hw_pid": str(product["id"]),
+    }
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
-    query.update(
-        {
-            "hw_auto_add": "1",
-            "hw_checkout": "1",
-            "hw_pid": str(product["id"]),
-        }
-    )
+    query.update(auto_add_params)
+    fragment = dict(parse_qsl(parts.fragment, keep_blank_values=True))
+    fragment.update(auto_add_params)
     return urlunsplit(
         (
             parts.scheme,
             parts.netloc,
             parts.path,
             urlencode(query),
-            parts.fragment,
+            urlencode(fragment),
         )
     )
 
