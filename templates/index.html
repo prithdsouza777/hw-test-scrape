@@ -143,19 +143,50 @@
 
         .product-link {
             display: block;
+            width: 100%;
             padding: 8px 0;
             background: #bb86fc;
             color: #000;
             text-align: center;
             text-decoration: none;
             border-radius: 4px;
+            border: 0;
             font-size: 0.85em;
             font-weight: 600;
             transition: opacity 0.2s;
+            cursor: pointer;
+            font-family: inherit;
         }
 
         .product-link:hover {
             opacity: 0.9;
+        }
+
+        .product-link.add-to-cart {
+            background: #03dac6;
+        }
+
+        .product-link.secondary {
+            background: #333;
+            color: #e0e0e0;
+            margin-top: 8px;
+        }
+
+        .cart-status {
+            color: #03dac6;
+            font-size: 0.78em;
+            margin-bottom: 10px;
+        }
+
+        .action-status {
+            display: none;
+            padding: 10px 12px;
+            margin-bottom: 20px;
+            background: #1e2f2d;
+            border: 1px solid #03dac6;
+            border-radius: 8px;
+            color: #b2fff7;
+            font-size: 0.9em;
         }
 
         @keyframes slideIn {
@@ -308,11 +339,11 @@
 
 <body>
     <div class="container">
-        <h1>In-Stock Monitor <span id="loading" class="loading-indicator"></span></h1>
+        <h1>Buyability Monitor <span id="loading" class="loading-indicator"></span></h1>
 
         <div class="stats-bar">
             <div class="stat-item">
-                In Stock: <span id="total-count" class="stat-value">0</span>
+                Cart Accepted: <span id="total-count" class="stat-value">0</span>
                 <span style="margin-left: 12px;">Cart Pending:</span>
                 <span id="pending-count" class="stat-value">0</span>
             </div>
@@ -323,10 +354,11 @@
         </div>
 
         <div class="error-banner" id="scrape-error"></div>
+        <div class="action-status" id="action-status"></div>
 
         <div class="monitor-section" id="monitor-section" style="display: none;">
             <div class="monitor-header">
-                <div class="monitor-title">Live Monitor (New & Back in Stock)</div>
+                <div class="monitor-title">Live Buyable Products (Cart Accepted)</div>
             </div>
             <div class="monitor-grid" id="monitor-container">
                 <!-- Monitored items will go here -->
@@ -339,7 +371,7 @@
 
         <div class="monitor-section" id="pending-section" style="display: none;">
             <div class="monitor-header">
-                <div class="monitor-title">Cart Pending (Page says stock, cart rejects)</div>
+                <div class="monitor-title">Cart Pending (Stock signal, cart rejects)</div>
             </div>
             <div class="monitor-grid" id="pending-container">
                 <!-- Pending cart-confirmation items will go here -->
@@ -356,6 +388,8 @@
         let seenAlerts = new Set();
         let firstLoad = true;
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const FIRSTCRY_CART_URL = 'https://www.firstcry.com/cart';
+        const FIRSTCRY_CART_COOKIE_NAME = '_$FC$_cookies_for_cart_v2_';
 
         function toggleSound() {
             soundEnabled = !soundEnabled;
@@ -433,6 +467,114 @@
             return link;
         }
 
+        function createCartStatus(product) {
+            const count = Number(product.cart_product_count || 0);
+            const text = count > 0
+                ? `Cart accepted (${count} addable)`
+                : 'Cart accepted';
+            return createElement('div', 'cart-status', text);
+        }
+
+        function cartCookieValue(product) {
+            return product.cart_cookie || `NO^${product.id}^1^0`;
+        }
+
+        function buildFirstCryAddScript(product) {
+            const cookieName = product.cart_cookie_name || FIRSTCRY_CART_COOKIE_NAME;
+            const cookieValue = cartCookieValue(product);
+            const productId = String(product.id);
+            const cartUrl = product.cart_url || FIRSTCRY_CART_URL;
+            const productUrl = product.link || cartUrl;
+
+            return 'javascript:(()=>{' +
+                `const n=${JSON.stringify(cookieName)};` +
+                `const v=${JSON.stringify(cookieValue)};` +
+                'document.cookie=n+"="+encodeURIComponent(v)+"; path=/; domain=.firstcry.com; max-age=604800; SameSite=Lax";' +
+                'try{localStorage.removeItem("CartCookieData");localStorage.removeItem("CartCookie")}catch(e){}' +
+                `if(typeof AddToCart==="function"){AddToCart(${JSON.stringify(productId)},"1","NO","0",true,false,false)}` +
+                `else if(typeof AddToCart_1==="function"){AddToCart_1(${JSON.stringify(productId)},"1","NO","0",true,false,false)}` +
+                `else{location.href=${JSON.stringify(productUrl)}}` +
+                `setTimeout(()=>{location.href=${JSON.stringify(cartUrl)}},500)` +
+                '})()';
+        }
+
+        function copyText(text) {
+            if (navigator.clipboard && window.isSecureContext) {
+                return navigator.clipboard.writeText(text);
+            }
+
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.opacity = '0';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                return Promise.resolve();
+            } catch (error) {
+                return Promise.reject(error);
+            } finally {
+                document.body.removeChild(textArea);
+            }
+        }
+
+        function showActionStatus(message, isError = false) {
+            const status = document.getElementById('action-status');
+            status.textContent = message;
+            status.style.display = 'block';
+            status.style.borderColor = isError ? '#cf6679' : '#03dac6';
+            status.style.background = isError ? '#351c23' : '#1e2f2d';
+            status.style.color = isError ? '#ffb4bf' : '#b2fff7';
+        }
+
+        function attemptFirstCryCartHandoff(product, addScript) {
+            const popup = window.open(product.link || FIRSTCRY_CART_URL, `firstcry-cart-${product.id}`);
+            if (!popup) {
+                return false;
+            }
+
+            window.setTimeout(() => {
+                try {
+                    popup.location.href = addScript;
+                } catch (error) {
+                    console.debug('FirstCry cart handoff was blocked by the browser:', error);
+                }
+            }, 1800);
+            return true;
+        }
+
+        function handleAddToCart(product) {
+            const addScript = buildFirstCryAddScript(product);
+            const opened = attemptFirstCryCartHandoff(product, addScript);
+            copyText(addScript)
+                .then(() => {
+                    const prefix = opened
+                        ? 'Opened FirstCry and attempted cart handoff.'
+                        : 'Popup was blocked.';
+                    showActionStatus(
+                        `${prefix} The FirstCry add helper was copied too; if the cart does not update, paste it in the address bar while you are on firstcry.com.`
+                    );
+                })
+                .catch(() => {
+                    showActionStatus(
+                        opened
+                            ? 'Opened FirstCry and attempted cart handoff. Browser clipboard copy failed.'
+                            : 'Popup and clipboard were blocked by the browser.',
+                        true
+                    );
+                });
+        }
+
+        function createAddToCartButton(product) {
+            const button = createElement('button', 'product-link add-to-cart', 'ADD TO CART');
+            button.type = 'button';
+            button.title = 'Cart API accepted this product. Tries to add it through FirstCry and copies the helper as fallback.';
+            button.addEventListener('click', () => handleAddToCart(product));
+            return button;
+        }
+
         function renderAlerts(alerts) {
             const container = document.getElementById('alerts-container');
             const elements = [];
@@ -445,7 +587,7 @@
                 card.appendChild(createElement(
                     'strong',
                     '',
-                    alert.type === 'NEW' ? 'NEW' : 'BACK IN STOCK'
+                    alert.type === 'NEW' ? 'NEW' : 'BUYABLE AGAIN'
                 ));
                 card.appendChild(document.createElement('br'));
                 card.appendChild(document.createTextNode(`${alert.message} `));
@@ -501,7 +643,8 @@
                 alertTime.style.color = '#757575';
                 alertTime.style.marginBottom = '8px';
                 card.appendChild(alertTime);
-                card.appendChild(createProductLink(product, 'BUY NOW'));
+                card.appendChild(createCartStatus(product));
+                card.appendChild(createAddToCartButton(product));
                 return card;
             });
             container.replaceChildren(...cards);
@@ -533,10 +676,10 @@
                 const note = createElement(
                     'div',
                     'pending-note',
-                    'Product page shows stock, but cart API is not accepting it yet.'
+                    'Listing/product stock is positive, but the cart API is not accepting it yet.'
                 );
                 card.appendChild(note);
-                card.appendChild(createProductLink(product, 'OPEN PRODUCT'));
+                card.appendChild(createProductLink(product, 'CHECK PRODUCT'));
                 return card;
             });
             container.replaceChildren(...cards);
@@ -551,7 +694,8 @@
                 const name = createElement('div', 'product-name', product.name);
                 name.title = product.name;
                 card.appendChild(name);
-                card.appendChild(createProductLink(product, 'OPEN PRODUCT'));
+                card.appendChild(createCartStatus(product));
+                card.appendChild(createAddToCartButton(product));
                 return card;
             });
             container.replaceChildren(...cards);
