@@ -26,6 +26,9 @@ API_URL = (
     "https://www.firstcry.com/svcs/SearchResult.svc/"
     "GetSearchResultProductsPaging"
 )
+PRODUCT_DETAIL_API_URL = (
+    "https://www.firstcry.com/svcs/CommonService.svc/getProduct/pid={product_id}/uid=0"
+)
 CART_PRODUCT_COUNT_URL = (
     "https://csc.fcappservices.in/ShoppingCart/ShoppingCart.svc/json/"
     "GetCartProductCount"
@@ -249,7 +252,29 @@ def _parse_json_assignment(html, pattern, missing_message):
         raise ApiScrapeError("FirstCry product detail page has invalid JSON data") from exc
 
 
+def parse_detail_api_stock_count(payload, product_id):
+    product_id = str(product_id)
+    try:
+        for product in payload.get("PColor") or []:
+            if str(product.get("pid")) == product_id:
+                return max(0, _parse_int(product.get("CS")))
+
+        product_info = payload["PInfo"]
+        if str(product_info.get("pid")) == product_id:
+            return max(0, _parse_int(product_info.get("CurSt")))
+    except (KeyError, TypeError) as exc:
+        raise ApiScrapeError("FirstCry product API returned unexpected stock data") from exc
+    raise ApiScrapeError("FirstCry product API returned mismatched product data")
+
+
 def parse_detail_stock_count(html, product_id):
+    try:
+        payload = json.loads(html)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        return parse_detail_api_stock_count(payload, product_id)
+
     product_details = _parse_json_assignment(
         html,
         CURRENT_PRODUCT_DETAIL_JSON_PATTERN,
@@ -265,9 +290,9 @@ def parse_detail_stock_count(html, product_id):
 
 def fetch_detail_stock_count(product, opener=urlopen):
     request = Request(
-        product["link"],
+        PRODUCT_DETAIL_API_URL.format(product_id=product["id"]),
         headers={
-            "Accept": "text/html,application/xhtml+xml",
+            "Accept": "application/json",
             "Referer": LISTING_URL,
             "User-Agent": USER_AGENT,
         },
@@ -355,7 +380,7 @@ def verify_in_stock_products(
                 )
                 verified_products[product["id"]] = {
                     **product,
-                    "stock_signal": "listing_api_detail_error",
+                    "stock_signal": "listing_api_product_api_error",
                 }
                 continue
 
@@ -364,7 +389,7 @@ def verify_in_stock_products(
                 "detail_stock_count": detail_stock_count,
                 "stock_count": detail_stock_count,
                 "in_stock": detail_stock_count > 0,
-                "stock_signal": "detail_page_current_product_cs",
+                "stock_signal": "product_api_current_stock",
             }
             if detail_stock_count <= 0:
                 LOGGER.info(
@@ -396,7 +421,7 @@ def verify_in_stock_products(
                         exc,
                     )
                     verified_product["stock_signal"] = (
-                        "detail_page_current_product_cs_cart_error"
+                        "product_api_current_stock_cart_error"
                     )
             verified_products[product["id"]] = verified_product
 
