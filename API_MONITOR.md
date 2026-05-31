@@ -42,9 +42,10 @@ The dashboard is centered on buyability, not the product page button:
 
 For cart-accepted products, the dashboard shows `ADD TO CART` instead of an
 open-product action. The button asks the local Flask app to open/reuse a
-Selenium Chrome window with the `selenium_profile` browser profile, merges the
-product into FirstCry's cart cookie format (`NO^{product_id}^1^0`), and opens
-FirstCry's cart in that window. This is necessary because browser security
+Selenium Chrome window with the `selenium_profile` browser profile, opens a new
+tab, merges the product into FirstCry's cart cookie format
+(`NO^{product_id}^1^0`), and opens FirstCry's cart in that tab. This is
+necessary because browser security
 prevents a local `127.0.0.1` dashboard page from directly setting
 `firstcry.com` cookies in your normal tab.
 
