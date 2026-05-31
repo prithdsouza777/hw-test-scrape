@@ -51,11 +51,13 @@ Open your FirstCry orderdetails page once so the extension can remember the
 URL. When `ADD TO CART` is clicked, the extension opens that orderdetails page
 with the dashboard product ID in the hash, creates a hidden recent-order style
 button, calls FirstCry's `sliderproductAddcart(productId, 1, button)` function,
-and then goes to checkout. This deliberately bypasses the visible product-page
-button because FirstCry can accept a product through reorder/recently-viewed
-paths before the PDP UI shows an add button. If FirstCry's cart system stops
-accepting the product between the monitor check and your click, checkout may
-still remove it; that is the real buyability race.
+and goes to checkout only after the target product appears in the FirstCry cart
+cookie. If that recent-order call does not confirm, the runner writes the same
+cart cookie format on `firstcry.com` before checkout. This deliberately bypasses
+the visible product-page button because FirstCry can accept a product through
+reorder/recently-viewed paths before the PDP UI shows an add button. If
+FirstCry's cart system stops accepting the product between the monitor check and
+your click, checkout may still remove it; that is the real buyability race.
 
 ## Run
 

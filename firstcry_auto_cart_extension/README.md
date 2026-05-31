@@ -26,7 +26,9 @@ When a dashboard `ADD TO CART` button is clicked, the extension opens your
 orderdetails page with the clicked product ID in the URL hash, creates a hidden
 button with the same data attributes as FirstCry's recent-order `ADD TO CART`
 button, calls `sliderproductAddcart(productId, 1, button)`, then goes to
-`https://checkout.firstcry.com/pay`.
+`https://checkout.firstcry.com/pay` after the target product appears in the
+FirstCry cart cookie. If the recent-order call does not confirm, the runner
+writes the same FirstCry cart cookie format on `firstcry.com` before checkout.
 
 After editing this folder, click **Reload** on the extension in
 `chrome://extensions`; Chrome does not automatically pick up changed unpacked

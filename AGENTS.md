@@ -39,7 +39,8 @@ a failed scrape must not be treated as a real out-of-stock event.
   recent-order handoff. Do not make `ADD TO CART` depend on the FirstCry PDP
   button being visible; hidden/cartable products are the main use case. The
   extension should prefer FirstCry's orderdetails `sliderproductAddcart`
-  function when available.
+  function when available and should not navigate to checkout until cart state
+  for the target product has been written or confirmed.
 - Treat `known_products.json` and `watchlist.txt` as local runtime/user files;
   do not commit them.
 - Do not swallow parser failures silently. Log enough context to diagnose
