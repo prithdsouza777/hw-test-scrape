@@ -468,6 +468,13 @@
             return link;
         }
 
+        function createViewProductButton(product) {
+            const link = createProductLink(product, 'VIEW PRODUCT');
+            link.className = 'product-link secondary';
+            link.title = 'Open the FirstCry product page without auto-add.';
+            return link;
+        }
+
         function renderAlerts(alerts) {
             const container = document.getElementById('alerts-container');
             const elements = [];
@@ -537,6 +544,7 @@
                 alertTime.style.marginBottom = '8px';
                 card.appendChild(alertTime);
                 card.appendChild(createCartStatus(product));
+                card.appendChild(createViewProductButton(product));
                 card.appendChild(createAddToCartButton(product));
                 return card;
             });
@@ -588,6 +596,7 @@
                 name.title = product.name;
                 card.appendChild(name);
                 card.appendChild(createCartStatus(product));
+                card.appendChild(createViewProductButton(product));
                 card.appendChild(createAddToCartButton(product));
                 return card;
             });
