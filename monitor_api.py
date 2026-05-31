@@ -26,6 +26,10 @@ API_URL = (
     "https://www.firstcry.com/svcs/SearchResult.svc/"
     "GetSearchResultProductsPaging"
 )
+CART_PRODUCT_COUNT_URL = (
+    "https://csc.fcappservices.in/ShoppingCart/ShoppingCart.svc/json/"
+    "GetCartProductCount"
+)
 IMAGE_BASE_URL = "https://cdn.fcglcdn.com/brainbees/images/products/219x265/"
 PAGE_SIZE = 20
 CURRENT_PRODUCT_DETAIL_JSON_PATTERN = re.compile(
@@ -65,12 +69,18 @@ def _env_int(name, default):
 
 REQUEST_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_TIMEOUT", 20)
 DETAIL_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_DETAIL_TIMEOUT", 10)
+CART_TIMEOUT_SECONDS = _env_float("FIRSTCRY_API_CART_TIMEOUT", 10)
 POLL_INTERVAL_SECONDS = _env_float("FIRSTCRY_API_POLL_INTERVAL", 60)
 MAX_PAGES = _env_int("FIRSTCRY_API_MAX_PAGES", 30)
 DETAIL_WORKERS = _env_int("FIRSTCRY_API_DETAIL_WORKERS", 8)
 MIN_API_PARSE_RATIO = _env_float("FIRSTCRY_API_MIN_PARSE_RATIO", 0.95)
 MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
 VERIFY_DETAIL_STOCK = os.getenv("FIRSTCRY_API_VERIFY_DETAIL_STOCK", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+VERIFY_CART_STOCK = os.getenv("FIRSTCRY_API_VERIFY_CART_STOCK", "1").lower() not in {
     "0",
     "false",
     "no",
@@ -271,12 +281,57 @@ def fetch_detail_stock_count(product, opener=urlopen):
         raise ApiScrapeError(f"FirstCry product detail request failed: {exc}") from exc
 
 
-def verify_in_stock_products(products, detail_fetcher=fetch_detail_stock_count):
+def parse_cart_product_count(raw_response):
+    try:
+        payload = json.loads(raw_response)
+        return max(0, _parse_int(payload["GetCartProductCountResult"]))
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ApiScrapeError("FirstCry cart API returned unexpected stock data") from exc
+
+
+def fetch_cart_product_count(product, opener=urlopen):
+    payload = json.dumps(
+        {"ProCookie": f"NO^{product['id']}^1^0"},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = Request(
+        CART_PRODUCT_COUNT_URL,
+        data=payload,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
+            "Origin": "https://www.firstcry.com",
+            "Referer": product["link"],
+            "User-Agent": USER_AGENT,
+        },
+        method="POST",
+    )
+
+    try:
+        with opener(request, timeout=CART_TIMEOUT_SECONDS) as response:
+            return parse_cart_product_count(
+                response.read().decode("utf-8", errors="replace")
+            )
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry cart API request failed: {exc}") from exc
+
+
+_DEFAULT_CART_FETCHER = object()
+
+
+def verify_in_stock_products(
+    products,
+    detail_fetcher=fetch_detail_stock_count,
+    cart_fetcher=_DEFAULT_CART_FETCHER,
+):
     in_stock_products = [
         product for product in products.values() if product.get("in_stock")
     ]
     if not in_stock_products:
         return products
+
+    if cart_fetcher is _DEFAULT_CART_FETCHER:
+        cart_fetcher = fetch_cart_product_count if VERIFY_CART_STOCK else None
 
     verified_products = dict(products)
     max_workers = min(DETAIL_WORKERS, len(in_stock_products))
@@ -317,6 +372,32 @@ def verify_in_stock_products(products, detail_fetcher=fetch_detail_stock_count):
                     product["id"],
                     product["name"],
                 )
+            elif cart_fetcher is not None:
+                try:
+                    cart_product_count = cart_fetcher(product)
+                    verified_product["cart_product_count"] = cart_product_count
+                    verified_product["stock_signal"] = "cart_product_count"
+                    if cart_product_count <= 0:
+                        verified_product["in_stock"] = False
+                        verified_product["stock_count"] = 0
+                        verified_product["pending_cart"] = True
+                        verified_product["stock_signal"] = "cart_pending"
+                        LOGGER.info(
+                            "Cart API rejected stale product stock for %s (%s)",
+                            product["id"],
+                            product["name"],
+                        )
+                except ApiScrapeError as exc:
+                    LOGGER.warning(
+                        "Could not verify cart stock for %s (%s); keeping detail "
+                        "signal: %s",
+                        product["id"],
+                        product["name"],
+                        exc,
+                    )
+                    verified_product["stock_signal"] = (
+                        "detail_page_current_product_cs_cart_error"
+                    )
             verified_products[product["id"]] = verified_product
 
     return verified_products

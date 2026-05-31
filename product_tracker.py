@@ -62,11 +62,18 @@ class ProductTracker:
             for product_id, product in self.current_products.items()
             if product["in_stock"]
         }
+        pending_products = {
+            product_id: deepcopy(product)
+            for product_id, product in self.current_products.items()
+            if not product["in_stock"] and product.get("pending_cart")
+        }
         return {
             "products": in_stock_products,
+            "pending_products": pending_products,
             "monitored_products": deepcopy(self.monitored_products),
             "alerts": deepcopy(self.alerts),
             "total_count": len(in_stock_products),
+            "pending_count": len(pending_products),
         }
 
     def _record_event(self, event_type, product, now):
