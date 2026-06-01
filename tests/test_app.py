@@ -80,6 +80,8 @@ class ApiDashboardTests(unittest.TestCase):
 
         self.assertEqual(200, response.status_code)
         self.assertIn("Hot Wheels Monitor", html)
+        self.assertIn('rel="icon"', html)
+        self.assertIn('/static/favicon.png', html)
         self.assertIn("Checkout Confirmed", html)
         self.assertIn("VIEW PRODUCT", html)
         self.assertIn("ADD TO CART", html)
@@ -99,6 +101,16 @@ class ApiDashboardTests(unittest.TestCase):
         response = self.client.get("/api/data")
         payload = response.get_json()
         self.assertNotIn("add_to_cart_link", payload["products"]["1"])
+
+    def test_dashboard_serves_hot_wheels_favicon(self):
+        response = self.client.get("/static/favicon.png")
+
+        try:
+            self.assertEqual(200, response.status_code)
+            self.assertEqual("image/png", response.content_type)
+            self.assertGreater(len(response.data), 0)
+        finally:
+            response.close()
 
 
 if __name__ == "__main__":
