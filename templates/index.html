@@ -19,6 +19,15 @@
             color: #ffffff;
             font-weight: 300;
             letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-logo {
+            width: auto;
+            height: 46px;
+            flex: 0 0 auto;
         }
 
         .container {
@@ -347,7 +356,10 @@
 
 <body>
     <div class="container">
-        <h1>Hot Wheels Monitor <span id="loading" class="loading-indicator"></span></h1>
+        <h1>
+            <img class="header-logo" src="{{ url_for('static', filename='favicon.png') }}" alt="" aria-hidden="true">
+            Hot Wheels Monitor <span id="loading" class="loading-indicator"></span>
+        </h1>
 
         <div class="stats-bar">
             <div class="stat-item">
