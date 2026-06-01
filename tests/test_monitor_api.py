@@ -7,15 +7,19 @@ from monitor_api import (
     CartCheckoutRejected,
     _decode_page,
     _build_gap_product_candidates,
+    _verify_known_products_with_checkout,
     LISTING_SORT_EXPRESSIONS,
     add_cart_action_metadata,
     build_cart_cookie_value,
+    build_cart_cookie_value_for_products,
     fetch_api_products,
+    fetch_checkout_cart_stock_counts,
     fetch_verified_cart_product_count,
     fetch_known_products,
     load_watchlist_ids,
     parse_cart_product_count,
     parse_checkout_cart_stock_count,
+    parse_checkout_cart_stock_counts,
     parse_api_product,
     parse_detail_api_stock_count,
     parse_detail_stock_count,
@@ -60,6 +64,14 @@ class ApiProductParsingTests(unittest.TestCase):
         self.assertEqual("_$FC$_cookies_for_cart_v2_", product["cart_cookie_name"])
         self.assertEqual("https://checkout.firstcry.com/pay", product["cart_url"])
         self.assertNotIn("add_to_cart_link", product)
+
+    def test_cart_cookie_value_for_products_batches_entries(self):
+        products = [{"id": "123"}, {"id": "456"}]
+
+        self.assertEqual(
+            "NO^123^1^0*NO^456^1^0",
+            build_cart_cookie_value_for_products(products),
+        )
 
     def test_parse_api_product_uses_current_stock_quantity(self):
         product = parse_api_product(
@@ -250,6 +262,20 @@ class ApiProductParsingTests(unittest.TestCase):
 
         self.assertEqual(2, parse_checkout_cart_stock_count(html, "123"))
 
+    def test_parse_checkout_cart_stock_counts_reads_multiple_products(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"123","Quantity":1,"CurrentStock":2},'
+            '{"ProductID":"456","Quantity":2,"CurrentStock":1}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(
+            {"123": 2, "456": 0},
+            parse_checkout_cart_stock_counts(html),
+        )
+
     def test_parse_checkout_cart_stock_count_rejects_insufficient_stock(self):
         html = (
             '<script>var cart_init = {"pOrderSummary":'
@@ -313,6 +339,87 @@ class ApiProductParsingTests(unittest.TestCase):
         self.assertEqual(1, context.exception.cart_product_count)
         self.assertEqual(0, context.exception.checkout_stock_count)
         self.assertEqual(["POST", "GET"], [method for _, method in calls])
+
+    def test_fetch_checkout_cart_stock_counts_sends_batched_cookie(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return (
+                    '<script>var cart_init = {"pOrderSummary":'
+                    '{"PurchaseOrderItemList":['
+                    '{"ProductID":"123","Quantity":1,"CurrentStock":2},'
+                    '{"ProductID":"456","Quantity":1,"CurrentStock":0}'
+                    "]}};</script>"
+                ).encode("utf-8")
+
+        cookies = []
+
+        def opener(request, timeout):
+            cookies.append(request.get_header("Cookie"))
+            return FakeResponse()
+
+        products = [
+            {
+                "id": "123",
+                "link": "https://www.firstcry.com/hot-wheels/a/123/product-detail",
+            },
+            {
+                "id": "456",
+                "link": "https://www.firstcry.com/hot-wheels/b/456/product-detail",
+            },
+        ]
+
+        self.assertEqual(
+            {"123": 2, "456": 0},
+            fetch_checkout_cart_stock_counts(products, opener=opener),
+        )
+        self.assertEqual(
+            "_$FC$_cookies_for_cart_v2_=NO^123^1^0*NO^456^1^0",
+            cookies[0],
+        )
+
+    def test_verify_known_products_with_checkout_batches_cart_accepted_products(self):
+        products = {
+            "123": {
+                "id": "123",
+                "name": "Hot Wheels Available",
+                "in_stock": True,
+                "stock_count": 1,
+                "cart_product_count": 1,
+                "detail_stock_count": 0,
+            },
+            "456": {
+                "id": "456",
+                "name": "Hot Wheels Sold Out",
+                "in_stock": True,
+                "stock_count": 1,
+                "cart_product_count": 1,
+                "detail_stock_count": 0,
+            },
+        }
+
+        batches = []
+
+        def checkout_stock_fetcher(batch):
+            batches.append([product["id"] for product in batch])
+            return {"123": 2, "456": 0}
+
+        verified = _verify_known_products_with_checkout(
+            products,
+            checkout_stock_fetcher=checkout_stock_fetcher,
+        )
+
+        self.assertEqual([["123", "456"]], batches)
+        self.assertTrue(verified["123"]["in_stock"])
+        self.assertEqual(2, verified["123"]["checkout_stock_count"])
+        self.assertFalse(verified["456"]["in_stock"])
+        self.assertTrue(verified["456"]["pending_cart"])
+        self.assertEqual("known_product_checkout_rejected", verified["456"]["stock_signal"])
 
 
 class ApiPaginationTests(unittest.TestCase):
