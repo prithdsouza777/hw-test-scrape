@@ -7,6 +7,8 @@ from monitor_api import (
     CartCheckoutRejected,
     _decode_page,
     _build_gap_product_candidates,
+    _build_variant_seed_candidates,
+    _build_variant_source_products,
     _verify_known_products_with_checkout,
     LISTING_SORT_EXPRESSIONS,
     add_cart_action_metadata,
@@ -16,11 +18,13 @@ from monitor_api import (
     fetch_checkout_cart_stock_counts,
     fetch_verified_cart_product_count,
     fetch_known_products,
+    fetch_variant_products,
     load_watchlist_ids,
     parse_cart_product_count,
     parse_checkout_cart_stock_count,
     parse_checkout_cart_stock_counts,
     parse_api_product,
+    parse_detail_api_variant_candidates,
     parse_detail_api_stock_count,
     parse_detail_stock_count,
     parse_gap_product,
@@ -168,6 +172,51 @@ class ApiProductParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiScrapeError, "mismatched product data"):
             parse_detail_api_stock_count(payload, "123")
 
+    def test_parse_detail_api_variant_candidates_reads_positive_hot_wheels_siblings(self):
+        payload = {
+            "PInfo": {
+                "pid": 22597520,
+                "pnm": "Hot Wheels Color Shifters Shark Hammer",
+                "BID": 113,
+            },
+            "PColor": [
+                {"pid": 22597520, "CS": 171, "Img": "22597520a.jpg;"},
+                {"pid": 22597521, "CS": 1, "Img": "22597521a.jpg;"},
+                {"pid": 22597522, "CS": 0, "Img": "22597522a.jpg;"},
+            ],
+        }
+
+        candidates = parse_detail_api_variant_candidates(payload, "22597520")
+
+        self.assertEqual({"22597520", "22597521"}, set(candidates))
+        self.assertEqual(1, candidates["22597521"]["stock_count"])
+        self.assertEqual(
+            "https://cdn.fcglcdn.com/brainbees/images/products/219x265/22597521a.webp",
+            candidates["22597521"]["image"],
+        )
+
+    def test_parse_detail_api_variant_candidates_accepts_hotwheels_without_space(self):
+        payload = {
+            "PInfo": {
+                "pid": 23033008,
+                "pnm": "Hotwheels 5 Diecast Free Wheel Toy Car Pack of 5",
+                "BID": 113,
+            },
+            "PColor": [{"pid": 21348, "CS": 9, "Img": "21348a.jpg;"}],
+        }
+
+        candidates = parse_detail_api_variant_candidates(payload, "23033008")
+
+        self.assertEqual(9, candidates["21348"]["stock_count"])
+
+    def test_parse_detail_api_variant_candidates_ignores_other_brands(self):
+        payload = {
+            "PInfo": {"pid": 123, "pnm": "Other Brand Car", "BID": 999},
+            "PColor": [{"pid": 456, "CS": 2, "Img": "456a.jpg;"}],
+        }
+
+        self.assertEqual({}, parse_detail_api_variant_candidates(payload, "123"))
+
     def test_parse_detail_stock_count_accepts_direct_product_api_json(self):
         payload = json.dumps(
             {
@@ -227,6 +276,23 @@ class ApiProductParsingTests(unittest.TestCase):
         self.assertFalse(product["in_stock"])
         self.assertEqual(0, product["stock_count"])
         self.assertEqual("known_product_api", product["stock_signal"])
+
+    def test_parse_known_product_accepts_hotwheels_without_space_for_brand_113(self):
+        payload = {
+            "PInfo": {
+                "pid": 21348,
+                "pnm": "Hotwheels 5 Diecast Free Wheel Toy Car Pack of 5",
+                "BID": 113,
+                "CurSt": 9,
+                "Img": "21348a.jpg;",
+            },
+            "PColor": [{"pid": 21348, "CS": 9}],
+        }
+
+        product = parse_known_product(payload, "21348")
+
+        self.assertEqual("21348", product["id"])
+        self.assertEqual(9, product["stock_count"])
 
     def test_parse_detail_stock_count_does_not_trust_stale_curst(self):
         html = (
@@ -428,6 +494,7 @@ class ApiPaginationTests(unittest.TestCase):
             (
                 "popularity",
                 "NewArrivals",
+                "BestSeller",
                 "HighestDiscount",
                 "Rating",
             ),
@@ -446,6 +513,57 @@ class ApiPaginationTests(unittest.TestCase):
             ("101", "102"),
             _build_gap_product_candidates(products),
         )
+
+    def test_build_variant_source_products_uses_listing_variant_signals(self):
+        raw_products = [
+            {**make_raw_product("10000"), "ClrCnt": "1", "SzCnt": "0", "TTData": ""},
+            {**make_raw_product("10001"), "ClrCnt": "2", "SzCnt": "0", "TTData": ""},
+            {**make_raw_product("10002"), "ClrCnt": "1", "SzCnt": "1", "TTData": ""},
+            {
+                **make_raw_product("10003"),
+                "ClrCnt": "1",
+                "SzCnt": "0",
+                "TTData": "10004|L 1 x B 1 x H 1 cm|FFFFFF|1",
+            },
+            {
+                **make_raw_product("10005", stock="2"),
+                "ClrCnt": "1",
+                "SzCnt": "1",
+                "TTData": "10005|L 1 x B 1 x H 1 cm|FFFFFF|1",
+            },
+        ]
+        products = {
+            raw_product["PId"]: parse_api_product(raw_product)
+            for raw_product in raw_products
+        }
+
+        source_products = _build_variant_source_products(raw_products, products)
+
+        self.assertEqual(["10001", "10002"], sorted(source_products))
+
+    def test_build_variant_seed_candidates_reads_positive_ttdata_siblings(self):
+        raw_products = [
+            {
+                **make_raw_product("10000"),
+                "TTData": (
+                    "10001|L 1 x B 1 x H 1 cm|FFFFFF|3,"
+                    "10002|L 1 x B 1 x H 1 cm|FFFFFF|0"
+                ),
+            },
+            {
+                **make_raw_product("10003", stock="2"),
+                "TTData": "10003|L 1 x B 1 x H 1 cm|FFFFFF|5",
+            },
+        ]
+        products = {
+            raw_product["PId"]: parse_api_product(raw_product)
+            for raw_product in raw_products
+        }
+
+        candidates = _build_variant_seed_candidates(raw_products, products)
+
+        self.assertEqual(["10001"], sorted(candidates))
+        self.assertEqual(3, candidates["10001"]["stock_count"])
 
     def test_fetch_api_products_reads_all_pages_and_deduplicates_variants(self):
         calls = []
@@ -545,6 +663,121 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual(3, result.unique_products)
         self.assertEqual(2, products["11"]["stock_count"])
         self.assertTrue(products["11"]["in_stock"])
+
+    def test_fetch_api_products_adds_variant_products_before_verification(self):
+        def page_fetcher(page_number):
+            return make_page(
+                [
+                    {
+                        **make_raw_product("10", stock="0"),
+                        "ClrCnt": "2",
+                    }
+                ],
+                expected_products=1,
+            )
+
+        def variant_product_fetcher(products, source_products, seed_candidates):
+            self.assertEqual(["10"], sorted(source_products))
+            self.assertEqual({}, seed_candidates)
+            return {
+                "11": {
+                    "id": "11",
+                    "name": "Hot Wheels Hidden Variant",
+                    "in_stock": True,
+                    "stock_count": 2,
+                    "detail_stock_count": 2,
+                    "link": "https://www.firstcry.com/hot-wheels/hidden/11/product-detail",
+                    "image": "",
+                    "stock_signal": "variant_product_api",
+                }
+            }
+
+        def detail_verifier(products):
+            self.assertIn("11", products)
+            return verify_in_stock_products(
+                products,
+                detail_fetcher=lambda product: 2 if product["id"] == "11" else 0,
+                cart_fetcher=lambda product: 1 if product["id"] == "11" else 0,
+            )
+
+        products, result = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=detail_verifier,
+            variant_product_fetcher=variant_product_fetcher,
+        )
+
+        self.assertEqual(2, result.unique_products)
+        self.assertTrue(products["11"]["in_stock"])
+        self.assertEqual("cart_product_count", products["11"]["stock_signal"])
+
+    def test_fetch_variant_products_discovers_missing_positive_sibling(self):
+        products = {
+            "10": {
+                "id": "10",
+                "name": "Hot Wheels Visible Source",
+                "in_stock": True,
+                "stock_count": 4,
+                "link": "https://www.firstcry.com/hot-wheels/source/10/product-detail",
+                "image": "",
+            }
+        }
+
+        def source_fetcher(product):
+            self.assertEqual("10", product["id"])
+            return {
+                "10": {"id": "10", "stock_count": 4, "image": ""},
+                "11": {"id": "11", "stock_count": 2, "image": "variant.webp"},
+            }
+
+        def product_fetcher(product_id):
+            self.assertEqual("11", product_id)
+            return {
+                "id": "11",
+                "name": "Hot Wheels Hidden Variant",
+                "in_stock": True,
+                "stock_count": 2,
+                "detail_stock_count": 2,
+                "link": "https://www.firstcry.com/hot-wheels/hidden/11/product-detail",
+                "image": "",
+                "stock_signal": "known_product_api",
+            }
+
+        discovered_products = fetch_variant_products(
+            products,
+            source_fetcher=source_fetcher,
+            product_fetcher=product_fetcher,
+        )
+
+        self.assertEqual(["11"], list(discovered_products))
+        self.assertEqual("variant_product_api", discovered_products["11"]["stock_signal"])
+        self.assertEqual("variant.webp", discovered_products["11"]["image"])
+
+    def test_fetch_variant_products_marks_existing_oos_sibling_for_verification(self):
+        products = {
+            "10": {
+                "id": "10",
+                "name": "Hot Wheels Visible Source",
+                "in_stock": False,
+                "stock_count": 0,
+                "link": "https://www.firstcry.com/hot-wheels/source/10/product-detail",
+                "image": "",
+            }
+        }
+
+        discovered_products = fetch_variant_products(
+            products,
+            source_fetcher=lambda product: {
+                "10": {"id": "10", "stock_count": 3, "image": "10.webp"}
+            },
+            product_fetcher=lambda product_id: self.fail(
+                "existing product metadata should be reused"
+            ),
+        )
+
+        self.assertEqual(["10"], list(discovered_products))
+        self.assertTrue(discovered_products["10"]["in_stock"])
+        self.assertEqual(3, discovered_products["10"]["detail_stock_count"])
+        self.assertEqual("variant_product_api", discovered_products["10"]["stock_signal"])
 
     def test_fetch_known_products_cart_probes_current_out_of_stock_products(self):
         products = {
