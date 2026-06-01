@@ -74,13 +74,13 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertEqual(0, payload["pending_products"]["2"]["cart_product_count"])
         self.assertEqual("NO^2^1^0", payload["pending_products"]["2"]["cart_cookie"])
 
-    def test_dashboard_uses_cart_acceptance_language_and_action(self):
+    def test_dashboard_uses_checkout_confirmation_language_and_action(self):
         response = self.client.get("/")
         html = response.get_data(as_text=True)
 
         self.assertEqual(200, response.status_code)
         self.assertIn("Hot Wheels Monitor", html)
-        self.assertIn("Cart Accepted", html)
+        self.assertIn("Checkout Confirmed", html)
         self.assertIn("VIEW PRODUCT", html)
         self.assertIn("ADD TO CART", html)
         self.assertIn(".product-actions", html)

@@ -4,15 +4,18 @@ from unittest.mock import patch
 
 from monitor_api import (
     ApiScrapeError,
+    CartCheckoutRejected,
     _decode_page,
     _build_gap_product_candidates,
     LISTING_SORT_EXPRESSIONS,
     add_cart_action_metadata,
     build_cart_cookie_value,
     fetch_api_products,
+    fetch_verified_cart_product_count,
     fetch_known_products,
     load_watchlist_ids,
     parse_cart_product_count,
+    parse_checkout_cart_stock_count,
     parse_api_product,
     parse_detail_api_stock_count,
     parse_detail_stock_count,
@@ -236,6 +239,81 @@ class ApiProductParsingTests(unittest.TestCase):
         with self.assertRaisesRegex(ApiScrapeError, "unexpected stock data"):
             parse_cart_product_count("{}")
 
+    def test_parse_checkout_cart_stock_count_reads_matching_stock(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"123","Quantity":1,"CurrentStock":2},'
+            '{"ProductID":"456","Quantity":1,"CurrentStock":0}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(2, parse_checkout_cart_stock_count(html, "123"))
+
+    def test_parse_checkout_cart_stock_count_rejects_insufficient_stock(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"123","Quantity":1,"CurrentStock":0}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(0, parse_checkout_cart_stock_count(html, "123"))
+
+    def test_parse_checkout_cart_stock_count_treats_missing_product_as_rejected(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"456","Quantity":1,"CurrentStock":4}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(0, parse_checkout_cart_stock_count(html, "123"))
+
+    def test_parse_checkout_cart_stock_count_rejects_missing_cart_data(self):
+        with self.assertRaisesRegex(ApiScrapeError, "missing cart_init"):
+            parse_checkout_cart_stock_count("<html></html>", "123")
+
+    def test_fetch_verified_cart_product_count_rejects_stale_checkout_stock(self):
+        class FakeResponse:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def read(self):
+                return self.body.encode("utf-8")
+
+        calls = []
+
+        def opener(request, timeout):
+            calls.append((request.full_url, request.get_method()))
+            if request.get_method() == "POST":
+                return FakeResponse('{"GetCartProductCountResult":1}')
+            return FakeResponse(
+                '<script>var cart_init = {"pOrderSummary":'
+                '{"PurchaseOrderItemList":['
+                '{"ProductID":"123","Quantity":1,"CurrentStock":0}'
+                "]}};</script>"
+            )
+
+        product = {
+            "id": "123",
+            "name": "Hot Wheels Hidden Car",
+            "link": "https://www.firstcry.com/hot-wheels/hidden/123/product-detail",
+        }
+
+        with self.assertRaises(CartCheckoutRejected) as context:
+            fetch_verified_cart_product_count(product, opener=opener)
+
+        self.assertEqual(1, context.exception.cart_product_count)
+        self.assertEqual(0, context.exception.checkout_stock_count)
+        self.assertEqual(["POST", "GET"], [method for _, method in calls])
+
 
 class ApiPaginationTests(unittest.TestCase):
     def test_default_listing_sorts_include_stock_relevant_firstcry_feeds(self):
@@ -419,6 +497,40 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertEqual("Hot Wheels Old Order Product", probed_products["99"]["name"])
         self.assertEqual("known_product_cart_count", probed_products["99"]["stock_signal"])
 
+    def test_fetch_known_products_marks_checkout_rejected_cart_signal_not_live(self):
+        def product_fetcher(product_id):
+            return {
+                "id": product_id,
+                "name": "Hot Wheels Fast Sellout",
+                "in_stock": False,
+                "stock_count": 0,
+                "detail_stock_count": 0,
+                "link": f"https://www.firstcry.com/hot-wheels/sellout/{product_id}/product-detail",
+                "image": "",
+                "stock_signal": "known_product_api",
+            }
+
+        def cart_fetcher(product):
+            raise CartCheckoutRejected(product, 1, 0)
+
+        probed_products = fetch_known_products(
+            {},
+            known_products={},
+            watchlist_ids={"99"},
+            product_fetcher=product_fetcher,
+            cart_fetcher=cart_fetcher,
+        )
+
+        self.assertEqual(["99"], list(probed_products))
+        self.assertFalse(probed_products["99"]["in_stock"])
+        self.assertTrue(probed_products["99"]["pending_cart"])
+        self.assertEqual(1, probed_products["99"]["cart_product_count"])
+        self.assertEqual(0, probed_products["99"]["checkout_stock_count"])
+        self.assertEqual(
+            "known_product_checkout_rejected",
+            probed_products["99"]["stock_signal"],
+        )
+
     def test_load_watchlist_ids_reads_product_urls_and_plain_ids(self):
         class FakePath:
             def exists(self):
@@ -544,6 +656,31 @@ class ApiPaginationTests(unittest.TestCase):
         self.assertTrue(products["2"]["in_stock"])
         self.assertEqual(1, products["2"]["cart_product_count"])
         self.assertEqual("cart_product_count", products["2"]["stock_signal"])
+
+    def test_fetch_api_products_marks_checkout_rejected_listing_stock_pending(self):
+        def page_fetcher(page_number):
+            return make_page([make_raw_product("1", stock="5")], expected_products=1)
+
+        def detail_verifier(products):
+            def cart_fetcher(product):
+                raise CartCheckoutRejected(product, 1, 0)
+
+            return verify_in_stock_products(
+                products,
+                detail_fetcher=lambda product: 1,
+                cart_fetcher=cart_fetcher,
+            )
+
+        products, _ = fetch_api_products(
+            page_fetcher=page_fetcher,
+            detail_verifier=detail_verifier,
+        )
+
+        self.assertFalse(products["1"]["in_stock"])
+        self.assertTrue(products["1"]["pending_cart"])
+        self.assertEqual(1, products["1"]["cart_product_count"])
+        self.assertEqual(0, products["1"]["checkout_stock_count"])
+        self.assertEqual("checkout_rejected", products["1"]["stock_signal"])
 
 
 if __name__ == "__main__":
