@@ -112,9 +112,16 @@ MIN_API_PARSE_RATIO = _env_float("FIRSTCRY_API_MIN_PARSE_RATIO", 0.95)
 MISSING_CONFIRMATION_SNAPSHOTS = _env_int("FIRSTCRY_API_MISSING_CONFIRMATIONS", 2)
 LISTING_SORT_EXPRESSIONS = _env_list(
     "FIRSTCRY_API_SORT_EXPRESSIONS",
-    "popularity,NewArrivals,HighestDiscount,Rating",
+    "popularity,NewArrivals,BestSeller,HighestDiscount,Rating",
 )
 VERIFY_GAP_PRODUCTS = os.getenv("FIRSTCRY_API_DISCOVER_GAP_PRODUCTS", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+VERIFY_VARIANT_PRODUCTS = os.getenv(
+    "FIRSTCRY_API_DISCOVER_VARIANT_PRODUCTS", "1"
+).lower() not in {
     "0",
     "false",
     "no",
@@ -254,6 +261,10 @@ def _build_image_url(images):
     return IMAGE_BASE_URL + image_name
 
 
+def _is_hot_wheels_product_name(name):
+    return "hotwheels" in re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
 def build_cart_cookie_value(product_id, quantity=1):
     return f"NO^{product_id}^{quantity}^0"
 
@@ -355,6 +366,86 @@ def _build_gap_product_candidates(products):
         )
         candidates = candidates[:GAP_PRODUCT_MAX_CANDIDATES]
     return tuple(candidates)
+
+
+def _raw_product_has_variant_signal(raw_product):
+    return (
+        _parse_int(raw_product.get("ClrCnt")) > 1
+        or _parse_int(raw_product.get("SzCnt")) > 0
+        or bool(str(raw_product.get("TTData") or "").strip())
+    )
+
+
+def _extract_ttdata_variant_candidates(raw_product):
+    candidates = {}
+    for raw_variant in str(raw_product.get("TTData") or "").split(","):
+        parts = raw_variant.split("|")
+        if len(parts) < 4:
+            continue
+
+        product_id = parts[0].strip()
+        if not product_id.isdigit():
+            continue
+
+        stock_count = max(0, _parse_int(parts[-1]))
+        existing_candidate = candidates.get(product_id)
+        if existing_candidate is None or stock_count > existing_candidate["stock_count"]:
+            candidates[product_id] = {
+                "id": product_id,
+                "stock_count": stock_count,
+                "image": "",
+            }
+    return candidates
+
+
+def _raw_product_needs_variant_source_detail(raw_product, products):
+    ttdata_candidates = _extract_ttdata_variant_candidates(raw_product)
+    if not ttdata_candidates:
+        return _raw_product_has_variant_signal(raw_product)
+
+    return any(
+        product_id not in products
+        or _parse_int(products[product_id].get("stock_count")) <= 0
+        for product_id, candidate in ttdata_candidates.items()
+        if candidate["stock_count"] <= 0
+    )
+
+
+def _build_variant_source_products(raw_products, products):
+    source_products = {}
+    for raw_product in raw_products:
+        if not _raw_product_needs_variant_source_detail(raw_product, products):
+            continue
+
+        product_id = str(raw_product.get("PId") or "").strip()
+        product = products.get(product_id)
+        if product is not None:
+            source_products[product_id] = product
+    return source_products
+
+
+def _build_variant_seed_candidates(raw_products, products):
+    candidates = {}
+    for raw_product in raw_products:
+        for product_id, candidate in _extract_ttdata_variant_candidates(
+            raw_product
+        ).items():
+            existing_product = products.get(product_id)
+            if (
+                existing_product is not None
+                and _parse_int(existing_product.get("stock_count")) > 0
+            ):
+                continue
+            if candidate["stock_count"] <= 0:
+                continue
+
+            existing_candidate = candidates.get(product_id)
+            if (
+                existing_candidate is None
+                or candidate["stock_count"] > existing_candidate["stock_count"]
+            ):
+                candidates[product_id] = candidate
+    return candidates
 
 
 def load_known_products(path=KNOWN_PRODUCTS_PATH):
@@ -489,6 +580,39 @@ def parse_detail_api_stock_count(payload, product_id):
     raise ApiScrapeError("FirstCry product API returned mismatched product data")
 
 
+def parse_detail_api_variant_candidates(payload, source_product_id):
+    source_product_id = str(source_product_id)
+    if not isinstance(payload, dict):
+        return {}
+
+    product_info = payload.get("PInfo") or {}
+    if str(product_info.get("pid")) != source_product_id:
+        return {}
+    if str(product_info.get("BID")) != "113":
+        return {}
+
+    name = str(product_info.get("pnm") or "").strip()
+    if not _is_hot_wheels_product_name(name):
+        return {}
+
+    candidates = {}
+    for raw_variant in payload.get("PColor") or []:
+        product_id = str(raw_variant.get("pid") or "").strip()
+        if not product_id.isdigit():
+            continue
+
+        stock_count = max(0, _parse_int(raw_variant.get("CS")))
+        if stock_count <= 0:
+            continue
+
+        candidates[product_id] = {
+            "id": product_id,
+            "stock_count": stock_count,
+            "image": _build_image_url(raw_variant.get("Img")),
+        }
+    return candidates
+
+
 def parse_detail_stock_count(html, product_id):
     try:
         payload = json.loads(html)
@@ -534,7 +658,7 @@ def parse_known_product(payload, product_id):
         return None
 
     name = str(product_info.get("pnm") or "").strip()
-    if not name or "hot wheel" not in name.lower():
+    if not name or not _is_hot_wheels_product_name(name):
         return None
 
     try:
@@ -610,6 +734,26 @@ def fetch_known_product_detail(product_id, opener=urlopen):
         raise ApiScrapeError("FirstCry known product API returned invalid JSON") from exc
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(f"FirstCry known product request failed: {exc}") from exc
+
+
+def fetch_variant_source_candidates(product, opener=urlopen):
+    request = Request(
+        PRODUCT_DETAIL_API_URL.format(product_id=product["id"]),
+        headers={
+            "Accept": "application/json",
+            "Referer": product.get("link") or LISTING_URL,
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=DETAIL_TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            return parse_detail_api_variant_candidates(payload, product["id"])
+    except json.JSONDecodeError as exc:
+        raise ApiScrapeError("FirstCry variant product API returned invalid JSON") from exc
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(f"FirstCry variant product request failed: {exc}") from exc
 
 
 def parse_cart_product_count(raw_response):
@@ -769,6 +913,106 @@ def fetch_gap_products(products, product_fetcher=fetch_gap_product):
             "Discovered %s in-stock Hot Wheels products from %s gap candidates",
             len(discovered_products),
             len(candidate_ids),
+        )
+    return discovered_products
+
+
+def fetch_variant_products(
+    products,
+    source_products=None,
+    seed_candidates=None,
+    source_fetcher=fetch_variant_source_candidates,
+    product_fetcher=fetch_known_product_detail,
+):
+    if source_products is None:
+        source_products = products
+
+    variant_candidates = dict(seed_candidates or {})
+    if source_products:
+        max_workers = min(DETAIL_WORKERS, len(source_products))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(source_fetcher, product): product["id"]
+                for product in source_products.values()
+            }
+            for future in as_completed(futures):
+                source_product_id = futures[future]
+                try:
+                    candidates = future.result()
+                except ApiScrapeError as exc:
+                    LOGGER.debug(
+                        "Could not inspect FirstCry variant source %s: %s",
+                        source_product_id,
+                        exc,
+                    )
+                    continue
+
+                for product_id, candidate in candidates.items():
+                    existing_candidate = variant_candidates.get(product_id)
+                    if (
+                        existing_candidate is None
+                        or candidate["stock_count"] > existing_candidate["stock_count"]
+                    ):
+                        variant_candidates[product_id] = candidate
+    if not variant_candidates:
+        return {}
+
+    discovered_products = {}
+    missing_candidate_ids = []
+    for product_id, candidate in variant_candidates.items():
+        existing_product = products.get(product_id)
+        if existing_product is None:
+            missing_candidate_ids.append(product_id)
+            continue
+        if (
+            existing_product.get("in_stock")
+            and _parse_int(existing_product.get("stock_count"))
+            >= candidate["stock_count"]
+        ):
+            continue
+
+        discovered_products[product_id] = {
+            **existing_product,
+            "in_stock": True,
+            "stock_count": candidate["stock_count"],
+            "detail_stock_count": candidate["stock_count"],
+            "image": existing_product.get("image") or candidate.get("image", ""),
+            "stock_signal": "variant_product_api",
+        }
+
+    if missing_candidate_ids:
+        max_workers = min(DETAIL_WORKERS, len(missing_candidate_ids))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(product_fetcher, product_id): product_id
+                for product_id in missing_candidate_ids
+            }
+            for future in as_completed(futures):
+                product_id = futures[future]
+                try:
+                    product = future.result()
+                except ApiScrapeError as exc:
+                    LOGGER.debug(
+                        "Could not inspect FirstCry variant product %s: %s",
+                        product_id,
+                        exc,
+                    )
+                    continue
+                if product is None or product["stock_count"] <= 0:
+                    continue
+
+                discovered_products[product_id] = {
+                    **product,
+                    "image": product.get("image")
+                    or variant_candidates[product_id].get("image", ""),
+                    "stock_signal": "variant_product_api",
+                }
+
+    if discovered_products:
+        LOGGER.info(
+            "Discovered %s in-stock Hot Wheels products from %s variant sources",
+            len(discovered_products),
+            len(source_products),
         )
     return discovered_products
 
@@ -1123,6 +1367,7 @@ def fetch_api_page(page_number, opener=urlopen, sort_expression=None):
 
 _DEFAULT_DETAIL_VERIFIER = object()
 _DEFAULT_GAP_FETCHER = object()
+_DEFAULT_VARIANT_FETCHER = object()
 _DEFAULT_KNOWN_FETCHER = object()
 
 
@@ -1187,6 +1432,7 @@ def fetch_api_products(
     detail_verifier=_DEFAULT_DETAIL_VERIFIER,
     sort_expressions=None,
     gap_product_fetcher=_DEFAULT_GAP_FETCHER,
+    variant_product_fetcher=_DEFAULT_VARIANT_FETCHER,
     known_product_fetcher=_DEFAULT_KNOWN_FETCHER,
 ):
     started_at = time.monotonic()
@@ -1229,6 +1475,8 @@ def fetch_api_products(
     for raw_product in raw_products:
         product = parse_api_product(raw_product)
         _merge_product_signal(products, product)
+    variant_seed_candidates = _build_variant_seed_candidates(raw_products, products)
+    variant_source_products = _build_variant_source_products(raw_products, products)
 
     if gap_product_fetcher is _DEFAULT_GAP_FETCHER:
         gap_product_fetcher = (
@@ -1238,6 +1486,20 @@ def fetch_api_products(
         )
     if gap_product_fetcher is not None:
         for product in gap_product_fetcher(products).values():
+            _merge_product_signal(products, product)
+
+    if variant_product_fetcher is _DEFAULT_VARIANT_FETCHER:
+        variant_product_fetcher = (
+            fetch_variant_products
+            if VERIFY_VARIANT_PRODUCTS and page_fetcher is fetch_api_page
+            else None
+        )
+    if variant_product_fetcher is not None:
+        for product in variant_product_fetcher(
+            products,
+            source_products=variant_source_products,
+            seed_candidates=variant_seed_candidates,
+        ).values():
             _merge_product_signal(products, product)
 
     if detail_verifier is _DEFAULT_DETAIL_VERIFIER:
