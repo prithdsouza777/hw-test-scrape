@@ -94,6 +94,7 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertNotIn("hw_auto_add", html)
         self.assertNotIn("Selenium", html)
         self.assertNotIn("OPEN PRODUCT", html)
+        self.assertNotIn("CHECK PRODUCT", html)
 
         response = self.client.get("/api/data")
         payload = response.get_json()
