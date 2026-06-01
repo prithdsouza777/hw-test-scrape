@@ -350,7 +350,7 @@
 
         <div class="stats-bar">
             <div class="stat-item">
-                Cart Accepted: <span id="total-count" class="stat-value">0</span>
+                Checkout Confirmed: <span id="total-count" class="stat-value">0</span>
                 <span style="margin-left: 12px;">Cart Pending:</span>
                 <span id="pending-count" class="stat-value">0</span>
             </div>
@@ -363,7 +363,7 @@
         <div class="error-banner" id="scrape-error"></div>
         <div class="monitor-section" id="monitor-section" style="display: none;">
             <div class="monitor-header">
-                <div class="monitor-title">Live Buyable Products (Cart Accepted)</div>
+                <div class="monitor-title">Live Buyable Products (Checkout Confirmed)</div>
             </div>
             <div class="monitor-grid" id="monitor-container">
                 <!-- Monitored items will go here -->
@@ -376,7 +376,7 @@
 
         <div class="monitor-section" id="pending-section" style="display: none;">
             <div class="monitor-header">
-                <div class="monitor-title">Cart Pending (Stock signal, cart rejects)</div>
+                <div class="monitor-title">Cart Pending (Stock signal, checkout rejects)</div>
             </div>
             <div class="monitor-grid" id="pending-container">
                 <!-- Pending cart-confirmation items will go here -->
@@ -473,8 +473,8 @@
         function createCartStatus(product) {
             const count = Number(product.cart_product_count || 0);
             const text = count > 0
-                ? `Cart accepted (${count} addable)`
-                : 'Cart accepted';
+                ? `Checkout confirmed (${count} cart item${count === 1 ? '' : 's'})`
+                : 'Checkout confirmed';
             return createElement('div', 'cart-status', text);
         }
 
@@ -487,7 +487,7 @@
             link.dataset.productName = product.name;
             link.dataset.productUrl = product.link;
             link.dataset.productImage = product.image || '';
-            link.title = 'Cart API accepted this product. The helper extension uses the recent-order add-to-cart path and opens checkout.';
+            link.title = 'Checkout stock is confirmed for this product. The helper extension uses the recent-order add-to-cart path and opens checkout.';
             return link;
         }
 
@@ -606,7 +606,7 @@
                 const note = createElement(
                     'div',
                     'pending-note',
-                    'Listing/product stock is positive, but the cart API is not accepting it yet.'
+                    'Listing/product stock is positive, but checkout is not accepting it yet.'
                 );
                 card.appendChild(note);
                 card.appendChild(createProductLink(product, 'CHECK PRODUCT'));
