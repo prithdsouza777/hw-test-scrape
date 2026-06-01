@@ -82,6 +82,7 @@ class ApiDashboardTests(unittest.TestCase):
         self.assertIn("Hot Wheels Monitor", html)
         self.assertIn('rel="icon"', html)
         self.assertIn('/static/favicon.png', html)
+        self.assertIn('class="header-logo"', html)
         self.assertIn("Checkout Confirmed", html)
         self.assertIn("VIEW PRODUCT", html)
         self.assertIn("ADD TO CART", html)
