@@ -29,6 +29,8 @@ button, calls `sliderproductAddcart(productId, 1, button)`, then goes to
 `https://checkout.firstcry.com/pay` after the target product appears in the
 FirstCry cart cookie. If the recent-order call does not confirm, the runner
 writes the same FirstCry cart cookie format on `firstcry.com` before checkout.
+On the checkout page, the extension prefills the coupon field with `JP37TY`
+when it can find an empty coupon/promo input.
 
 After editing this folder, click **Reload** on the extension in
 `chrome://extensions`; Chrome does not automatically pick up changed unpacked
