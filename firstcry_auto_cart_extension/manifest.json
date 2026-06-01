@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FirstCry Cart Bridge",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Adds cart-accepted Hot Wheels products from the local dashboard to the FirstCry cart and opens checkout.",
   "permissions": [
     "storage",
@@ -34,6 +34,15 @@
       ],
       "js": [
         "orderdetails_content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://checkout.firstcry.com/pay*"
+      ],
+      "js": [
+        "checkout_coupon_content.js"
       ],
       "run_at": "document_idle"
     }
