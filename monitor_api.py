@@ -42,12 +42,26 @@ PAGE_SIZE = 20
 CURRENT_PRODUCT_DETAIL_JSON_PATTERN = re.compile(
     r"(?:^|[;,]|\bvar\s+)\s*CurrentProductDetailJSON\s*="
 )
+CART_INIT_JSON_PATTERN = re.compile(r"(?:^|[;,]|\bvar\s+)\s*cart_init\s*=")
 PRODUCT_ID_PATTERN = re.compile(r"(?:/|^)(\d{5,})(?:/product-detail\b|$)")
 STANDALONE_PRODUCT_ID_PATTERN = re.compile(r"\b\d{5,}\b")
 
 
 class ApiScrapeError(RuntimeError):
     """Raised when the listing API cannot safely replace the last snapshot."""
+
+
+class CartCheckoutRejected(ApiScrapeError):
+    """Raised when the count API accepts a cart cookie but checkout rejects stock."""
+
+    def __init__(self, product, cart_product_count, checkout_stock_count):
+        self.product = product
+        self.cart_product_count = cart_product_count
+        self.checkout_stock_count = checkout_stock_count
+        super().__init__(
+            "FirstCry checkout rejected cart stock for "
+            f"{product['id']} ({product['name']})"
+        )
 
 
 @dataclass(frozen=True)
@@ -592,6 +606,40 @@ def parse_cart_product_count(raw_response):
         raise ApiScrapeError("FirstCry cart API returned unexpected stock data") from exc
 
 
+def parse_checkout_cart_stock_count(raw_response, product_id):
+    product_id = str(product_id)
+    cart = _parse_json_assignment(
+        raw_response,
+        CART_INIT_JSON_PATTERN,
+        "FirstCry checkout cart page is missing cart_init",
+    )
+
+    try:
+        cart_items = cart["pOrderSummary"]["PurchaseOrderItemList"]
+    except (KeyError, TypeError) as exc:
+        raise ApiScrapeError(
+            "FirstCry checkout cart page returned unexpected cart data"
+        ) from exc
+
+    if not isinstance(cart_items, list):
+        raise ApiScrapeError(
+            "FirstCry checkout cart page returned unexpected cart item data"
+        )
+
+    for item in cart_items:
+        if not isinstance(item, dict):
+            continue
+        item_product_id = str(
+            item.get("ProductID") or item.get("ProductInfoID") or ""
+        ).strip()
+        if item_product_id == product_id:
+            quantity = max(1, _parse_int(item.get("Quantity"), default=1))
+            current_stock = max(0, _parse_int(item.get("CurrentStock")))
+            return current_stock if current_stock >= quantity else 0
+
+    return 0
+
+
 def fetch_cart_product_count(product, opener=urlopen):
     payload = json.dumps(
         {"ProCookie": build_cart_cookie_value(product["id"])},
@@ -617,6 +665,47 @@ def fetch_cart_product_count(product, opener=urlopen):
             )
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(f"FirstCry cart API request failed: {exc}") from exc
+
+
+def fetch_checkout_cart_stock_count(product, opener=urlopen):
+    request = Request(
+        FIRSTCRY_CART_URL,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "Cookie": (
+                f"{FIRSTCRY_CART_COOKIE_NAME}="
+                f"{build_cart_cookie_value(product['id'])}"
+            ),
+            "Referer": product["link"],
+            "User-Agent": USER_AGENT,
+        },
+    )
+
+    try:
+        with opener(request, timeout=CART_TIMEOUT_SECONDS) as response:
+            return parse_checkout_cart_stock_count(
+                response.read().decode("utf-8", errors="replace"),
+                product["id"],
+            )
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise ApiScrapeError(
+            f"FirstCry checkout cart request failed: {exc}"
+        ) from exc
+
+
+def fetch_verified_cart_product_count(product, opener=urlopen):
+    cart_product_count = fetch_cart_product_count(product, opener=opener)
+    if cart_product_count <= 0:
+        return 0
+
+    checkout_stock_count = fetch_checkout_cart_stock_count(product, opener=opener)
+    if checkout_stock_count <= 0:
+        raise CartCheckoutRejected(
+            product,
+            cart_product_count,
+            checkout_stock_count,
+        )
+    return cart_product_count
 
 
 def fetch_gap_products(products, product_fetcher=fetch_gap_product):
@@ -689,6 +778,16 @@ def _probe_known_product(product_id, product, product_fetcher, cart_fetcher):
 
     try:
         cart_product_count = cart_fetcher(product)
+    except CartCheckoutRejected as exc:
+        return {
+            **product,
+            "in_stock": False,
+            "stock_count": 0,
+            "cart_product_count": exc.cart_product_count,
+            "checkout_stock_count": exc.checkout_stock_count,
+            "pending_cart": True,
+            "stock_signal": "known_product_checkout_rejected",
+        }
     except ApiScrapeError as exc:
         if product.get("detail_stock_count", 0) > 0:
             return {
@@ -724,7 +823,7 @@ def fetch_known_products(
     known_products=None,
     watchlist_ids=None,
     product_fetcher=fetch_known_product_detail,
-    cart_fetcher=fetch_cart_product_count,
+    cart_fetcher=fetch_verified_cart_product_count,
 ):
     if known_products is None:
         known_products = load_known_products()
@@ -790,7 +889,7 @@ def verify_in_stock_products(
         return products
 
     if cart_fetcher is _DEFAULT_CART_FETCHER:
-        cart_fetcher = fetch_cart_product_count if VERIFY_CART_STOCK else None
+        cart_fetcher = fetch_verified_cart_product_count if VERIFY_CART_STOCK else None
 
     verified_products = dict(products)
     max_workers = min(DETAIL_WORKERS, len(in_stock_products))
@@ -846,6 +945,20 @@ def verify_in_stock_products(
                             product["id"],
                             product["name"],
                         )
+                except CartCheckoutRejected as exc:
+                    verified_product["in_stock"] = False
+                    verified_product["stock_count"] = 0
+                    verified_product["cart_product_count"] = exc.cart_product_count
+                    verified_product["checkout_stock_count"] = (
+                        exc.checkout_stock_count
+                    )
+                    verified_product["pending_cart"] = True
+                    verified_product["stock_signal"] = "checkout_rejected"
+                    LOGGER.info(
+                        "Checkout rejected stale cart stock for %s (%s)",
+                        product["id"],
+                        product["name"],
+                    )
                 except ApiScrapeError as exc:
                     LOGGER.warning(
                         "Could not verify cart stock for %s (%s); keeping detail "
