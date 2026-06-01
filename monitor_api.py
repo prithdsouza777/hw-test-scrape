@@ -129,6 +129,7 @@ VERIFY_KNOWN_PRODUCTS = os.getenv("FIRSTCRY_API_PROBE_KNOWN_PRODUCTS", "1").lowe
 }
 KNOWN_PRODUCT_WORKERS = _env_int("FIRSTCRY_API_KNOWN_PRODUCT_WORKERS", 12)
 KNOWN_PRODUCT_MAX_IDS = _env_int("FIRSTCRY_API_KNOWN_PRODUCT_MAX_IDS", 1000)
+CHECKOUT_BATCH_SIZE = _env_int("FIRSTCRY_API_CHECKOUT_BATCH_SIZE", 25)
 KNOWN_PRODUCTS_PATH = Path(
     os.getenv(
         "FIRSTCRY_API_KNOWN_PRODUCTS_FILE",
@@ -257,6 +258,13 @@ def build_cart_cookie_value(product_id, quantity=1):
     return f"NO^{product_id}^{quantity}^0"
 
 
+def build_cart_cookie_value_for_products(products, quantity=1):
+    return "*".join(
+        build_cart_cookie_value(product["id"], quantity)
+        for product in products
+    )
+
+
 def add_cart_action_metadata(product):
     product = dict(product)
     product["cart_cookie_name"] = FIRSTCRY_CART_COOKIE_NAME
@@ -274,6 +282,12 @@ def _extract_product_ids(value):
 
 def _product_id_sort_key(product_id):
     return int(product_id) if str(product_id).isdigit() else str(product_id)
+
+
+def _batched(values, batch_size):
+    values = tuple(values)
+    for index in range(0, len(values), batch_size):
+        yield values[index : index + batch_size]
 
 
 def _normalise_known_product(product):
@@ -606,8 +620,7 @@ def parse_cart_product_count(raw_response):
         raise ApiScrapeError("FirstCry cart API returned unexpected stock data") from exc
 
 
-def parse_checkout_cart_stock_count(raw_response, product_id):
-    product_id = str(product_id)
+def parse_checkout_cart_stock_counts(raw_response):
     cart = _parse_json_assignment(
         raw_response,
         CART_INIT_JSON_PATTERN,
@@ -626,18 +639,25 @@ def parse_checkout_cart_stock_count(raw_response, product_id):
             "FirstCry checkout cart page returned unexpected cart item data"
         )
 
+    stock_counts = {}
     for item in cart_items:
         if not isinstance(item, dict):
             continue
         item_product_id = str(
             item.get("ProductID") or item.get("ProductInfoID") or ""
         ).strip()
-        if item_product_id == product_id:
+        if item_product_id:
             quantity = max(1, _parse_int(item.get("Quantity"), default=1))
             current_stock = max(0, _parse_int(item.get("CurrentStock")))
-            return current_stock if current_stock >= quantity else 0
+            stock_counts[item_product_id] = (
+                current_stock if current_stock >= quantity else 0
+            )
 
-    return 0
+    return stock_counts
+
+
+def parse_checkout_cart_stock_count(raw_response, product_id):
+    return parse_checkout_cart_stock_counts(raw_response).get(str(product_id), 0)
 
 
 def fetch_cart_product_count(product, opener=urlopen):
@@ -667,30 +687,40 @@ def fetch_cart_product_count(product, opener=urlopen):
         raise ApiScrapeError(f"FirstCry cart API request failed: {exc}") from exc
 
 
-def fetch_checkout_cart_stock_count(product, opener=urlopen):
+def fetch_checkout_cart_stock_counts(products, opener=urlopen):
+    products = tuple(products)
+    if not products:
+        return {}
+
     request = Request(
         FIRSTCRY_CART_URL,
         headers={
             "Accept": "text/html,application/xhtml+xml",
             "Cookie": (
                 f"{FIRSTCRY_CART_COOKIE_NAME}="
-                f"{build_cart_cookie_value(product['id'])}"
+                f"{build_cart_cookie_value_for_products(products)}"
             ),
-            "Referer": product["link"],
+            "Referer": products[0].get("link") or LISTING_URL,
             "User-Agent": USER_AGENT,
         },
     )
 
     try:
         with opener(request, timeout=CART_TIMEOUT_SECONDS) as response:
-            return parse_checkout_cart_stock_count(
-                response.read().decode("utf-8", errors="replace"),
-                product["id"],
+            return parse_checkout_cart_stock_counts(
+                response.read().decode("utf-8", errors="replace")
             )
     except (HTTPError, URLError, TimeoutError) as exc:
         raise ApiScrapeError(
             f"FirstCry checkout cart request failed: {exc}"
         ) from exc
+
+
+def fetch_checkout_cart_stock_count(product, opener=urlopen):
+    return fetch_checkout_cart_stock_counts((product,), opener=opener).get(
+        str(product["id"]),
+        0,
+    )
 
 
 def fetch_verified_cart_product_count(product, opener=urlopen):
@@ -818,6 +848,74 @@ def _probe_known_product(product_id, product, product_fetcher, cart_fetcher):
     return None
 
 
+def _mark_known_product_checkout_pending(product, stock_signal):
+    return {
+        **product,
+        "in_stock": False,
+        "stock_count": 0,
+        "pending_cart": True,
+        "stock_signal": stock_signal,
+    }
+
+
+def _verify_known_products_with_checkout(
+    products,
+    checkout_stock_fetcher=fetch_checkout_cart_stock_counts,
+):
+    checkout_candidates = [
+        product
+        for product in products.values()
+        if product.get("in_stock") and _parse_int(product.get("cart_product_count")) > 0
+    ]
+    if not checkout_candidates:
+        return products
+
+    verified_products = dict(products)
+    for batch in _batched(checkout_candidates, CHECKOUT_BATCH_SIZE):
+        try:
+            checkout_stock_counts = checkout_stock_fetcher(batch)
+        except ApiScrapeError as exc:
+            LOGGER.warning(
+                "Could not verify checkout stock for %s known products: %s",
+                len(batch),
+                exc,
+            )
+            for product in batch:
+                if _parse_int(product.get("detail_stock_count")) > 0:
+                    verified_products[product["id"]] = _mark_known_product_checkout_pending(
+                        product,
+                        "known_product_checkout_error",
+                    )
+                else:
+                    verified_products.pop(product["id"], None)
+            continue
+
+        for product in batch:
+            checkout_stock_count = max(
+                0,
+                _parse_int(checkout_stock_counts.get(str(product["id"]))),
+            )
+            if checkout_stock_count <= 0:
+                verified_products[product["id"]] = {
+                    **_mark_known_product_checkout_pending(
+                        product,
+                        "known_product_checkout_rejected",
+                    ),
+                    "checkout_stock_count": checkout_stock_count,
+                }
+            else:
+                verified_products[product["id"]] = {
+                    **product,
+                    "checkout_stock_count": checkout_stock_count,
+                    "stock_count": max(
+                        _parse_int(product.get("stock_count")),
+                        checkout_stock_count,
+                    ),
+                }
+
+    return verified_products
+
+
 def fetch_known_products(
     products,
     known_products=None,
@@ -838,6 +936,8 @@ def fetch_known_products(
     if not probe_products:
         return {}
 
+    use_batched_checkout = cart_fetcher is fetch_verified_cart_product_count
+    probe_cart_fetcher = fetch_cart_product_count if use_batched_checkout else cart_fetcher
     discovered_products = {}
     max_workers = min(KNOWN_PRODUCT_WORKERS, len(probe_products))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -847,7 +947,7 @@ def fetch_known_products(
                 product_id,
                 product,
                 product_fetcher,
-                cart_fetcher,
+                probe_cart_fetcher,
             ): product_id
             for product_id, product in probe_products.items()
         }
@@ -864,6 +964,9 @@ def fetch_known_products(
                 continue
             if product is not None:
                 discovered_products[product["id"]] = product
+
+    if use_batched_checkout:
+        discovered_products = _verify_known_products_with_checkout(discovered_products)
 
     if discovered_products:
         LOGGER.info(
