@@ -137,6 +137,7 @@ VERIFY_KNOWN_PRODUCTS = os.getenv("FIRSTCRY_API_PROBE_KNOWN_PRODUCTS", "1").lowe
 KNOWN_PRODUCT_WORKERS = _env_int("FIRSTCRY_API_KNOWN_PRODUCT_WORKERS", 12)
 KNOWN_PRODUCT_MAX_IDS = _env_int("FIRSTCRY_API_KNOWN_PRODUCT_MAX_IDS", 1000)
 CHECKOUT_BATCH_SIZE = _env_int("FIRSTCRY_API_CHECKOUT_BATCH_SIZE", 25)
+CHECKOUT_PINCODE = os.getenv("FIRSTCRY_API_CHECKOUT_PINCODE", "575003").strip()
 KNOWN_PRODUCTS_PATH = Path(
     os.getenv(
         "FIRSTCRY_API_KNOWN_PRODUCTS_FILE",
@@ -231,6 +232,16 @@ def _parse_int(value, default=0):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return False
 
 
 def _parse_expected_count(value):
@@ -764,6 +775,32 @@ def parse_cart_product_count(raw_response):
         raise ApiScrapeError("FirstCry cart API returned unexpected stock data") from exc
 
 
+def _parse_checkout_item_stock_count(item):
+    quantity = max(1, _parse_int(item.get("Quantity"), default=1))
+    current_stock = max(0, _parse_int(item.get("CurrentStock")))
+    if current_stock < quantity:
+        return 0
+
+    accepted_stock = current_stock
+    if "IsServicable" in item:
+        serviceable_stock = max(0, _parse_int(item.get("IsServicable")))
+        if serviceable_stock < quantity:
+            return 0
+        accepted_stock = min(accepted_stock, serviceable_stock)
+
+    if (
+        _parse_int(item.get("NoOfPinCodeToCheck")) > 0
+        and not _parse_bool(item.get("isValidPincodeForDropShipment"))
+    ):
+        return 0
+
+    warehouse_id = str(item.get("warehouseid") or item.get("WarehouseID") or "").strip()
+    if warehouse_id == "0":
+        return 0
+
+    return accepted_stock
+
+
 def parse_checkout_cart_stock_counts(raw_response):
     cart = _parse_json_assignment(
         raw_response,
@@ -791,11 +828,7 @@ def parse_checkout_cart_stock_counts(raw_response):
             item.get("ProductID") or item.get("ProductInfoID") or ""
         ).strip()
         if item_product_id:
-            quantity = max(1, _parse_int(item.get("Quantity"), default=1))
-            current_stock = max(0, _parse_int(item.get("CurrentStock")))
-            stock_counts[item_product_id] = (
-                current_stock if current_stock >= quantity else 0
-            )
+            stock_counts[item_product_id] = _parse_checkout_item_stock_count(item)
 
     return stock_counts
 
@@ -836,14 +869,25 @@ def fetch_checkout_cart_stock_counts(products, opener=urlopen):
     if not products:
         return {}
 
+    cookies = [
+        (
+            f"{FIRSTCRY_CART_COOKIE_NAME}="
+            f"{build_cart_cookie_value_for_products(products)}"
+        )
+    ]
+    if CHECKOUT_PINCODE:
+        cookies.extend(
+            [
+                f"globalPincode={CHECKOUT_PINCODE}",
+                f"qwik_pincode={CHECKOUT_PINCODE}",
+            ]
+        )
+
     request = Request(
         FIRSTCRY_CART_URL,
         headers={
             "Accept": "text/html,application/xhtml+xml",
-            "Cookie": (
-                f"{FIRSTCRY_CART_COOKIE_NAME}="
-                f"{build_cart_cookie_value_for_products(products)}"
-            ),
+            "Cookie": "; ".join(cookies),
             "Referer": products[0].get("link") or LISTING_URL,
             "User-Agent": USER_AGENT,
         },
