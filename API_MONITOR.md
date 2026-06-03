@@ -16,8 +16,11 @@ the listing API claims stock is available, the monitor also calls
 `CommonService.svc/getProduct/pid={pid}/uid=0` and confirms the matching
 `PColor[].CS` value before checking FirstCry's cart product-count API with an
 isolated synthetic cart cookie. The cart check catches products that still look
-available upstream but are removed when added to cart. This check does not use
-or modify your browser cart.
+available upstream but are removed when added to cart. The final checkout check
+also validates checkout serviceability for the configured pincode, because
+FirstCry can expose stale `CurrentStock` while marking the item undeliverable
+with `IsServicable = 0` or no allocated warehouse. This check does not use or
+modify your browser cart.
 
 The product API can also expose stocked Hot Wheels sibling variants in
 `PColor[]` before those product IDs appear as standalone listing rows. The
@@ -41,8 +44,9 @@ ignored by git.
 
 The dashboard is centered on buyability, not the product page button:
 
-- `Cart Accepted`: accepted by the cart product-count API. This is the main
-  dashboard count and the only state that triggers a buyable alert.
+- `Cart Accepted`: accepted by the cart product-count API and by checkout stock
+  and pincode serviceability checks. This is the main dashboard count and the
+  only state that triggers a buyable alert.
 - `Cart Pending`: listing/product API stock is positive, but cart validation still
   rejects the item. These products may become cartable after FirstCry's stock
   data finishes propagating.
@@ -95,6 +99,8 @@ can still become buyable after FirstCry finishes propagating stock internally.
 - `FIRSTCRY_API_DETAIL_TIMEOUT`: product API HTTP timeout in seconds,
   default `10`
 - `FIRSTCRY_API_CART_TIMEOUT`: cart API HTTP timeout in seconds, default `10`
+- `FIRSTCRY_API_CHECKOUT_PINCODE`: pincode used for checkout serviceability
+  confirmation, default `575003`; set empty to omit pincode cookies
 - `FIRSTCRY_API_DETAIL_WORKERS`: concurrent product API checks, default `8`
 - `FIRSTCRY_API_MAX_PAGES`: maximum pagination safety limit, default `30`
 - `FIRSTCRY_API_MIN_PARSE_RATIO`: minimum listing API completeness ratio before
