@@ -352,6 +352,42 @@ class ApiProductParsingTests(unittest.TestCase):
 
         self.assertEqual(0, parse_checkout_cart_stock_count(html, "123"))
 
+    def test_parse_checkout_cart_stock_count_rejects_undeliverable_stock(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"123","Quantity":1,"CurrentStock":17,'
+            '"IsServicable":0,"NoOfPinCodeToCheck":10,'
+            '"isValidPincodeForDropShipment":false,"warehouseid":"0"}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(0, parse_checkout_cart_stock_count(html, "123"))
+
+    def test_parse_checkout_cart_stock_count_reads_serviceable_stock(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"123","Quantity":1,"CurrentStock":17,'
+            '"IsServicable":17,"NoOfPinCodeToCheck":0,'
+            '"isValidPincodeForDropShipment":false,"warehouseid":"10"}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(17, parse_checkout_cart_stock_count(html, "123"))
+
+    def test_parse_checkout_cart_stock_count_rejects_unallocated_warehouse(self):
+        html = (
+            '<script>var cart_init = {"pOrderSummary":'
+            '{"PurchaseOrderItemList":['
+            '{"ProductID":"123","Quantity":1,"CurrentStock":17,'
+            '"IsServicable":17,"NoOfPinCodeToCheck":0,'
+            '"isValidPincodeForDropShipment":false,"warehouseid":"0"}'
+            "]}};</script>"
+        )
+
+        self.assertEqual(0, parse_checkout_cart_stock_count(html, "123"))
+
     def test_parse_checkout_cart_stock_count_treats_missing_product_as_rejected(self):
         html = (
             '<script>var cart_init = {"pOrderSummary":'
@@ -445,7 +481,8 @@ class ApiProductParsingTests(unittest.TestCase):
             fetch_checkout_cart_stock_counts(products, opener=opener),
         )
         self.assertEqual(
-            "_$FC$_cookies_for_cart_v2_=NO^123^1^0*NO^456^1^0",
+            "_$FC$_cookies_for_cart_v2_=NO^123^1^0*NO^456^1^0; "
+            "globalPincode=575003; qwik_pincode=575003",
             cookies[0],
         )
 
